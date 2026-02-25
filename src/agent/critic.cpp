@@ -40,6 +40,7 @@ double Critic::score(const TaskResult& result) const {
 }
 
 TaskResult Critic::execute(const Task& task) {
+    reset_token_consumption();
     if (is_budget_exceeded(task)) {
         return make_budget_exceeded_result(task);
     }

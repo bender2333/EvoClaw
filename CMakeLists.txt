@@ -25,7 +25,9 @@ set(EVOLCLAW_SOURCES
     src/agent/critic.cpp
     src/agent/executor.cpp
     src/agent/planner.cpp
+    src/budget/budget_tracker.cpp
     src/event_log/event_log.cpp
+    src/evolution/evolution_budget.cpp
     src/evolution/evolver.cpp
     src/facade/facade.cpp
     src/governance/governance_kernel.cpp
@@ -35,6 +37,7 @@ set(EVOLCLAW_SOURCES
     src/protocol/bus.cpp
     src/router/router.cpp
     src/server/server.cpp
+    src/slp/semantic_primitive.cpp
 )
 add_library(evoclaw_core ${EVOLCLAW_SOURCES})
 target_include_directories(evoclaw_core PUBLIC src)

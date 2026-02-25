@@ -24,8 +24,8 @@ struct AgentConfig {
 struct Task {
     struct Budget {
         int max_tokens = 4096;
-        int max_tool_calls = 8;
-        int max_rounds = 3;
+        int max_tool_calls = 10;
+        int max_rounds = 5;
     };
 
     TaskId id;
@@ -67,9 +67,14 @@ public:
     void set_message_bus(std::shared_ptr<protocol::MessageBus> bus) { bus_ = std::move(bus); }
     void set_llm_client(std::shared_ptr<llm::LLMClient> client) { llm_client_ = std::move(client); }
 
+    void reset_token_consumption();
+    [[nodiscard]] int tokens_consumed() const { return tokens_consumed_; }
+    [[nodiscard]] int prompt_tokens_consumed() const { return prompt_tokens_consumed_; }
+    [[nodiscard]] int completion_tokens_consumed() const { return completion_tokens_consumed_; }
+
 protected:
     [[nodiscard]] llm::LLMResponse call_llm(const std::string& system_prompt,
-                                            const std::string& user_message) const;
+                                            const std::string& user_message);
     [[nodiscard]] bool is_budget_exceeded(const Task& task, int estimated_output_tokens = 0) const;
     [[nodiscard]] TaskResult make_budget_exceeded_result(const Task& task,
                                                          int estimated_output_tokens = 0) const;
@@ -77,6 +82,9 @@ protected:
     AgentConfig config_;
     std::shared_ptr<protocol::MessageBus> bus_;
     std::shared_ptr<llm::LLMClient> llm_client_;
+    int tokens_consumed_ = 0;
+    int prompt_tokens_consumed_ = 0;
+    int completion_tokens_consumed_ = 0;
 };
 
 } // namespace evoclaw::agent

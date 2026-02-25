@@ -3,21 +3,55 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 namespace evoclaw::evolution {
+namespace {
+
+int estimate_word_tokens(const std::string& text) {
+    std::istringstream iss(text);
+    int count = 0;
+    std::string token;
+    while (iss >> token) {
+        ++count;
+    }
+    return count;
+}
+
+int estimate_proposal_tokens(const Tension& tension) {
+    const int description_tokens = estimate_word_tokens(tension.description);
+    const int severity_tokens = estimate_word_tokens(tension.severity);
+    return std::clamp(description_tokens + severity_tokens + 64, 64, 512);
+}
+
+} // namespace
 
 Evolver::Evolver(governance::GovernanceKernel& governance)
-    : config_(), governance_(governance) {}
+    : config_(),
+      governance_(governance),
+      budget_(config_.max_evolution_cycles_per_hour, config_.evolution_token_budget) {}
 
 Evolver::Evolver(governance::GovernanceKernel& governance, Config config)
-    : config_(config), governance_(governance) {}
+    : config_(std::move(config)),
+      governance_(governance),
+      budget_(config_.max_evolution_cycles_per_hour, config_.evolution_token_budget) {}
 
-std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) const {
+std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) {
     std::vector<Tension> tensions;
+
+    if (!budget_.can_evolve()) {
+        return tensions;
+    }
+    budget_.record_cycle();
 
     // 获取所有 agent 的统计
     const auto& entries = log.all_entries();
-    if (entries.empty()) return tensions;
+    if (entries.empty()) {
+        return tensions;
+    }
 
     // 按 agent 分组统计
     std::unordered_map<AgentId, std::vector<double>> agent_scores;
@@ -32,17 +66,21 @@ std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) const {
 
     // 检测 KPI 下降
     for (const auto& [agent_id, scores] : agent_scores) {
-        if (scores.size() < 2) continue;
+        if (scores.size() < 2) {
+            continue;
+        }
 
         double total = std::accumulate(scores.begin(), scores.end(), 0.0);
         double avg = total / static_cast<double>(scores.size());
 
         // 最近 N 个的平均 vs 整体平均
-        size_t recent_n = std::min(scores.size() / 2, static_cast<size_t>(5));
-        if (recent_n == 0) continue;
+        std::size_t recent_n = std::min(scores.size() / 2, static_cast<std::size_t>(5));
+        if (recent_n == 0) {
+            continue;
+        }
 
         double recent_total = 0.0;
-        for (size_t i = scores.size() - recent_n; i < scores.size(); ++i) {
+        for (std::size_t i = scores.size() - recent_n; i < scores.size(); ++i) {
             recent_total += scores[i];
         }
         double recent_avg = recent_total / static_cast<double>(recent_n);
@@ -53,8 +91,8 @@ std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) const {
             t.type = TensionType::KPI_DECLINE;
             t.source_agent = agent_id;
             t.description = "KPI decline detected: recent avg " +
-                           std::to_string(recent_avg) + " < threshold " +
-                           std::to_string(avg * config_.kpi_decline_threshold);
+                            std::to_string(recent_avg) + " < threshold " +
+                            std::to_string(avg * config_.kpi_decline_threshold);
             t.severity = "high";
             t.metadata = {{"agent_id", agent_id}, {"recent_avg", recent_avg}, {"overall_avg", avg}};
             tensions.push_back(std::move(t));
@@ -78,10 +116,31 @@ std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) const {
     return tensions;
 }
 
-std::vector<EvolutionProposal> Evolver::propose(const std::vector<Tension>& tensions) const {
+std::vector<EvolutionProposal> Evolver::propose(const std::vector<Tension>& tensions) {
     std::vector<EvolutionProposal> proposals;
 
+    if (tensions.empty()) {
+        return proposals;
+    }
+
+    const std::size_t max_proposals = config_.max_proposals_per_cycle > 0
+                                          ? static_cast<std::size_t>(config_.max_proposals_per_cycle)
+                                          : tensions.size();
+
     for (const auto& tension : tensions) {
+        if (proposals.size() >= max_proposals) {
+            break;
+        }
+
+        const int estimated_tokens = estimate_proposal_tokens(tension);
+        const nlohmann::json status = budget_.status();
+        const int token_budget = status.value("token_budget", 0);
+        const int remaining = status.value("tokens_remaining", -1);
+        if (token_budget > 0 && remaining >= 0 && remaining < estimated_tokens) {
+            break;
+        }
+        budget_.record_tokens(estimated_tokens);
+
         EvolutionProposal proposal;
         proposal.id = generate_uuid();
         proposal.target_agent = tension.source_agent;
@@ -117,8 +176,8 @@ std::vector<EvolutionProposal> Evolver::propose(const std::vector<Tension>& tens
 }
 
 ABTestResult Evolver::run_ab_test(const EvolutionProposal& proposal,
-                                   const std::vector<double>& control_scores,
-                                   const std::vector<double>& candidate_scores) const {
+                                  const std::vector<double>& control_scores,
+                                  const std::vector<double>& candidate_scores) const {
     ABTestResult result;
     result.control_id = proposal.target_agent;
     result.candidate_id = proposal.target_agent + "_candidate";
@@ -146,7 +205,7 @@ ABTestResult Evolver::run_ab_test(const EvolutionProposal& proposal,
 }
 
 bool Evolver::apply_evolution(const EvolutionProposal& proposal,
-                               const ABTestResult& test_result) const {
+                              const ABTestResult& test_result) const {
     // 检查改进是否显著
     if (!test_result.significant || test_result.improvement < config_.min_improvement) {
         return false;
@@ -163,6 +222,17 @@ bool Evolver::apply_evolution(const EvolutionProposal& proposal,
         "evolver", proposal.description, details);
 
     return permission == governance::Permission::ALLOW;
+}
+
+bool Evolver::can_evolve() const {
+    return budget_.can_evolve();
+}
+
+nlohmann::json Evolver::budget_status() const {
+    nlohmann::json status = budget_.status();
+    status["max_proposals_per_cycle"] = config_.max_proposals_per_cycle;
+    status["evolution_token_budget"] = config_.evolution_token_budget;
+    return status;
 }
 
 } // namespace evoclaw::evolution

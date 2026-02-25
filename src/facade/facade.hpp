@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agent/agent.hpp"
+#include "budget/budget_tracker.hpp"
 #include "evolution/evolver.hpp"
 #include "event_log/event_log.hpp"
 #include "governance/governance_kernel.hpp"
@@ -9,6 +10,7 @@
 #include "memory/working_memory.hpp"
 #include "protocol/bus.hpp"
 #include "router/router.hpp"
+#include "slp/semantic_primitive.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -32,6 +34,7 @@ public:
         std::filesystem::path config_path = "./constitution.json";
         router::RoutingConfig router_config;
         evolution::Evolver::Config evolver_config;
+        int global_token_limit = 0;
     };
 
     explicit EvoClawFacade(Config config);
@@ -43,6 +46,8 @@ public:
     [[nodiscard]] agent::TaskResult submit_task(const agent::Task& task);
     void trigger_evolution();
     [[nodiscard]] nlohmann::json get_status() const;
+    [[nodiscard]] nlohmann::json get_budget_report() const;
+    [[nodiscard]] nlohmann::json get_evolution_budget_status() const;
     [[nodiscard]] nlohmann::json get_capability_matrix() const;
     [[nodiscard]] bool verify_event_log() const;
 
@@ -58,6 +63,8 @@ private:
     std::unique_ptr<governance::GovernanceKernel> governance_;
     std::unique_ptr<evolution::Evolver> evolver_;
     std::shared_ptr<llm::LLMClient> llm_client_;
+    std::shared_ptr<budget::BudgetTracker> budget_tracker_;
+    std::shared_ptr<slp::SLPCompressor> slp_compressor_;
 
     std::unordered_map<AgentId, std::shared_ptr<agent::Agent>> agents_;
     nlohmann::json last_evolution_report_;

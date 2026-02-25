@@ -1,5 +1,6 @@
 #pragma once
 
+#include "evolution/evolution_budget.hpp"
 #include "evolution/tension.hpp"
 #include "governance/governance_kernel.hpp"
 #include "memory/org_log.hpp"
@@ -46,22 +47,28 @@ public:
         int consecutive_failures = 10;
         double min_improvement = 0.05;
         double p_value_threshold = 0.05;
+        int max_evolution_cycles_per_hour = 5;
+        int max_proposals_per_cycle = 3;
+        int evolution_token_budget = 10000;
     };
 
     explicit Evolver(governance::GovernanceKernel& governance);
     Evolver(governance::GovernanceKernel& governance, Config config);
 
-    [[nodiscard]] std::vector<Tension> monitor(const memory::OrgLog& log) const;
-    [[nodiscard]] std::vector<EvolutionProposal> propose(const std::vector<Tension>& tensions) const;
+    [[nodiscard]] std::vector<Tension> monitor(const memory::OrgLog& log);
+    [[nodiscard]] std::vector<EvolutionProposal> propose(const std::vector<Tension>& tensions);
     [[nodiscard]] ABTestResult run_ab_test(const EvolutionProposal& proposal,
                                            const std::vector<double>& control_scores,
                                            const std::vector<double>& candidate_scores) const;
     [[nodiscard]] bool apply_evolution(const EvolutionProposal& proposal,
                                        const ABTestResult& test_result) const;
+    [[nodiscard]] bool can_evolve() const;
+    [[nodiscard]] nlohmann::json budget_status() const;
 
 private:
     Config config_;
     governance::GovernanceKernel& governance_;
+    EvolutionBudget budget_;
 };
 
 } // namespace evoclaw::evolution

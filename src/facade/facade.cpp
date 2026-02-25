@@ -102,6 +102,7 @@ void EvoClawFacade::initialize() {
     governance_ = std::make_unique<governance::GovernanceKernel>(load_constitution(config_.config_path));
     evolver_ = std::make_unique<evolution::Evolver>(*governance_, config_.evolver_config);
     llm_client_ = std::make_shared<llm::LLMClient>(llm::create_from_env());
+    budget_tracker_ = std::make_shared<budget::BudgetTracker>();
 
     last_evolution_report_ = {
         {"status", "not_run"},
@@ -223,6 +224,15 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
     const auto start = std::chrono::steady_clock::now();
     agent::TaskResult result = agent_it->second->execute(task);
     const auto end = std::chrono::steady_clock::now();
+
+    // Record token consumption to budget tracker
+    if (budget_tracker_) {
+        budget_tracker_->record(
+            agent_it->second->id(),
+            agent_it->second->prompt_tokens_consumed(),
+            agent_it->second->completion_tokens_consumed()
+        );
+    }
 
     const double duration_ms =
         static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
@@ -533,6 +543,21 @@ void EvoClawFacade::ensure_initialized() const {
 bool EvoClawFacade::verify_event_log() const {
     if (!event_log_) return true;
     return event_log_->verify_integrity();
+}
+
+nlohmann::json EvoClawFacade::get_budget_report() const {
+    if (!budget_tracker_) return nlohmann::json{{"error", "budget tracker not initialized"}};
+    return budget_tracker_->report();
+}
+
+nlohmann::json EvoClawFacade::get_evolution_budget_status() const {
+    if (!evolver_) return nlohmann::json{{"error", "evolver not initialized"}};
+    // Check if evolver has evolution budget info in status
+    auto status = get_status();
+    if (status.contains("evolution")) {
+        return status["evolution"];
+    }
+    return nlohmann::json{{"status", "no evolution data"}};
 }
 
 } // namespace evoclaw::facade

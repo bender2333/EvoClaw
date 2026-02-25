@@ -21,6 +21,8 @@ add_executable(evoclaw_test
     test_governance.cpp
     test_evolution.cpp
     test_llm.cpp
+    test_budget.cpp
+    test_slp.cpp
     test_integration.cpp
 )
 

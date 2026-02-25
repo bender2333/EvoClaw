@@ -219,6 +219,22 @@ void EvoClawServer::setup_routes() {
         }
     });
 
+    server_.Get("/api/budget", [this](const httplib::Request&, httplib::Response& res) {
+        try {
+            set_json_response(res, facade_.get_budget_report());
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
+    server_.Get("/api/evolution/budget", [this](const httplib::Request&, httplib::Response& res) {
+        try {
+            set_json_response(res, facade_.get_evolution_budget_status());
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
     server_.Get("/api/events", [this](const httplib::Request&, httplib::Response& res) {
         json payload;
         payload["events"] = json::array();

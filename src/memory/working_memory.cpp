@@ -48,6 +48,10 @@ void WorkingMemory::clear() {
     conversation_history_.clear();
 }
 
+void WorkingMemory::set_compressor(std::shared_ptr<slp::SLPCompressor> compressor) {
+    compressor_ = std::move(compressor);
+}
+
 std::string WorkingMemory::one_line_summary() const {
     if (data_.empty()) {
         return "WorkingMemory: empty";
@@ -68,7 +72,14 @@ std::string WorkingMemory::one_line_summary() const {
         oss << ", ...";
     }
     oss << "]";
-    return oss.str();
+
+    const std::string summary = oss.str();
+    if (!compressor_) {
+        return summary;
+    }
+
+    const slp::SemanticPrimitive compressed = compressor_->compress(summary, slp::Granularity::SMALL);
+    return compressed.content.empty() ? summary : compressed.content;
 }
 
 std::string WorkingMemory::paragraph_summary() const {
@@ -109,7 +120,14 @@ std::string WorkingMemory::paragraph_summary() const {
     if (keys.size() > kValueLimit) {
         oss << " | ...";
     }
-    return oss.str();
+
+    const std::string summary = oss.str();
+    if (!compressor_) {
+        return summary;
+    }
+
+    const slp::SemanticPrimitive compressed = compressor_->compress(summary, slp::Granularity::MEDIUM);
+    return compressed.content.empty() ? summary : compressed.content;
 }
 
 } // namespace evoclaw::memory
