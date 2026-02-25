@@ -20,6 +20,7 @@ add_executable(evoclaw_test
     test_event_log.cpp
     test_governance.cpp
     test_evolution.cpp
+    test_integration.cpp
 )
 
 target_link_libraries(evoclaw_test PRIVATE evoclaw_core GTest::gtest_main)

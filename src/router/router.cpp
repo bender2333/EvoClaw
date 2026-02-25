@@ -256,4 +256,16 @@ AgentId Router::pick_candidate(const std::string& intent, std::vector<AgentId> c
     return selected;
 }
 
+nlohmann::json Router::get_capability_matrix() const {
+    // 简化返回，实际应该序列化 matrix_ 的内容
+    nlohmann::json j = nlohmann::json::object();
+    for (const auto& [agent_id, agent_ptr] : agents_) {
+        j[agent_id] = {
+            {"contract", agent_ptr->contract().module_id},
+            {"role", agent_ptr->role()}
+        };
+    }
+    return j;
+}
+
 } // namespace evoclaw::router

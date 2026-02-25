@@ -32,6 +32,7 @@ public:
     [[nodiscard]] std::optional<AgentId> route(const agent::Task& task);
     [[nodiscard]] AgentId route_with_exploration(const std::string& intent);
     [[nodiscard]] std::vector<AgentId> match_by_contract(const umi::CapabilityProfile& required) const;
+    [[nodiscard]] nlohmann::json get_capability_matrix() const;
 
 private:
     [[nodiscard]] bool is_cold_start(const AgentId& agent) const;

@@ -1,2 +1,5 @@
 add_executable(evoclaw_basic_usage basic_usage.cpp)
 target_link_libraries(evoclaw_basic_usage PRIVATE evoclaw_core)
+
+add_executable(evoclaw_evolution_demo evolution_demo.cpp)
+target_link_libraries(evoclaw_evolution_demo PRIVATE evoclaw_core)

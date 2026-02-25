@@ -27,6 +27,7 @@ set(EVOLCLAW_SOURCES
     src/agent/planner.cpp
     src/event_log/event_log.cpp
     src/evolution/evolver.cpp
+    src/facade/facade.cpp
     src/governance/governance_kernel.cpp
     src/memory/org_log.cpp
     src/memory/working_memory.cpp
