@@ -20,7 +20,19 @@ find_package(Threads REQUIRED)
 include_directories(third_party)
 
 # 核心库
-file(GLOB_RECURSE EVOLCLAW_SOURCES src/*.cpp)
+set(EVOLCLAW_SOURCES
+    src/agent/agent.cpp
+    src/agent/critic.cpp
+    src/agent/executor.cpp
+    src/agent/planner.cpp
+    src/event_log/event_log.cpp
+    src/evolution/evolver.cpp
+    src/governance/governance_kernel.cpp
+    src/memory/org_log.cpp
+    src/memory/working_memory.cpp
+    src/protocol/bus.cpp
+    src/router/router.cpp
+)
 add_library(evoclaw_core ${EVOLCLAW_SOURCES})
 target_include_directories(evoclaw_core PUBLIC src)
 target_link_libraries(evoclaw_core PUBLIC Threads::Threads)
