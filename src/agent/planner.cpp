@@ -7,6 +7,34 @@
 namespace evoclaw::agent {
 
 TaskResult Planner::execute(const Task& task) {
+    if (is_budget_exceeded(task)) {
+        return make_budget_exceeded_result(task);
+    }
+
+    if (llm_client_) {
+        const auto response = call_llm(
+            "You are a task planner. Break down the given task into clear, actionable steps. "
+            "Output a numbered list of steps. Be concise.",
+            "Task: " + task.description + "\nContext: " + task.context.dump());
+
+        if (response.success) {
+            TaskResult result;
+            result.task_id = task.id;
+            result.agent_id = id();
+            result.success = true;
+            result.output = "Generated plan:\n" + response.content;
+            result.metadata = {
+                {"role", role()},
+                {"source", "llm"},
+                {"model", llm_client_->config().model},
+                {"prompt_tokens", response.prompt_tokens},
+                {"completion_tokens", response.completion_tokens}
+            };
+            result.confidence = 0.86;
+            return result;
+        }
+    }
+
     std::vector<std::string> steps;
     steps.push_back("Understand objective: " + (task.description.empty() ? std::string("unspecified") : task.description));
 
@@ -34,7 +62,8 @@ TaskResult Planner::execute(const Task& task) {
     result.output = output.str();
     result.metadata = {
         {"steps", steps},
-        {"role", role()}
+        {"role", role()},
+        {"source", "mock"}
     };
     result.confidence = 0.78;
     return result;

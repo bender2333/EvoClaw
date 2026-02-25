@@ -101,6 +101,7 @@ void EvoClawFacade::initialize() {
 
     governance_ = std::make_unique<governance::GovernanceKernel>(load_constitution(config_.config_path));
     evolver_ = std::make_unique<evolution::Evolver>(*governance_, config_.evolver_config);
+    llm_client_ = std::make_shared<llm::LLMClient>(llm::create_from_env());
 
     last_evolution_report_ = {
         {"status", "not_run"},
@@ -124,6 +125,9 @@ void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent) {
     }
 
     agent->set_message_bus(bus_);
+    if (llm_client_) {
+        agent->set_llm_client(llm_client_);
+    }
     bus_->subscribe(agent->id(), [weak_agent = std::weak_ptr<agent::Agent>(agent)](const protocol::Message& msg) {
         if (const auto locked = weak_agent.lock()) {
             locked->on_message(msg);
@@ -278,6 +282,15 @@ nlohmann::json EvoClawFacade::get_status() const {
         {"agent_count", agents_.size()},
         {"agents", get_capability_matrix().value("agents", json::array())},
         {"bus_subscribers", bus_ ? bus_->subscriber_count() : 0U},
+        {"llm", llm_client_ ? llm_client_->status_json()
+                             : json{
+                                 {"base_url", ""},
+                                 {"model", ""},
+                                 {"has_api_key", false},
+                                 {"mock_mode", true},
+                                 {"temperature", 0.0},
+                                 {"max_tokens", 0}
+                             }},
         {"org_log_entries", org_entries},
         {"event_log_integrity", (event_log_ ? event_log_->verify_integrity() : true)},
         {"evolution", {{"last_cycle", last_evolution_report_}}}

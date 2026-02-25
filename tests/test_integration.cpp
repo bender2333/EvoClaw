@@ -29,16 +29,32 @@ evoclaw::agent::AgentConfig make_agent_config(const std::string& id,
 class IntegrationTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // 确保集成测试不调用真实 LLM
+        saved_key_ = getenv("EVOCLAW_API_KEY") ? std::string(getenv("EVOCLAW_API_KEY")) : "";
+        saved_home_ = getenv("HOME") ? std::string(getenv("HOME")) : "";
+        unsetenv("EVOCLAW_API_KEY");
+        
         test_dir_ = std::filesystem::temp_directory_path() / ("evoclaw_int_" + evoclaw::generate_uuid());
         std::filesystem::create_directories(test_dir_);
+        
+        // 设置假 HOME 防止读取真实 openclaw.json
+        setenv("HOME", test_dir_.string().c_str(), 1);
     }
 
     void TearDown() override {
+        if (!saved_key_.empty()) {
+            setenv("EVOCLAW_API_KEY", saved_key_.c_str(), 1);
+        }
+        if (!saved_home_.empty()) {
+            setenv("HOME", saved_home_.c_str(), 1);
+        }
         std::error_code ec;
         std::filesystem::remove_all(test_dir_, ec);
     }
 
     std::filesystem::path test_dir_;
+    std::string saved_key_;
+    std::string saved_home_;
 };
 
 TEST_F(IntegrationTest, FullSystemWorkflow) {

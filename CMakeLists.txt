@@ -29,6 +29,7 @@ set(EVOLCLAW_SOURCES
     src/evolution/evolver.cpp
     src/facade/facade.cpp
     src/governance/governance_kernel.cpp
+    src/llm/llm_client.cpp
     src/memory/org_log.cpp
     src/memory/working_memory.cpp
     src/protocol/bus.cpp

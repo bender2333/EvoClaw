@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "llm/llm_client.hpp"
 #include "protocol/bus.hpp"
 #include "protocol/message.hpp"
 #include "umi/contract.hpp"
@@ -64,10 +65,18 @@ public:
     virtual void on_message(const protocol::Message& msg);
 
     void set_message_bus(std::shared_ptr<protocol::MessageBus> bus) { bus_ = std::move(bus); }
+    void set_llm_client(std::shared_ptr<llm::LLMClient> client) { llm_client_ = std::move(client); }
 
 protected:
+    [[nodiscard]] llm::LLMResponse call_llm(const std::string& system_prompt,
+                                            const std::string& user_message) const;
+    [[nodiscard]] bool is_budget_exceeded(const Task& task, int estimated_output_tokens = 0) const;
+    [[nodiscard]] TaskResult make_budget_exceeded_result(const Task& task,
+                                                         int estimated_output_tokens = 0) const;
+
     AgentConfig config_;
     std::shared_ptr<protocol::MessageBus> bus_;
+    std::shared_ptr<llm::LLMClient> llm_client_;
 };
 
 } // namespace evoclaw::agent

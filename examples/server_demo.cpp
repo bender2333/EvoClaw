@@ -37,6 +37,14 @@ int main() {
     evoclaw::facade::EvoClawFacade facade(config);
     facade.initialize();
 
+    const auto status = facade.get_status();
+    if (status.contains("llm") && status["llm"].is_object()) {
+        const auto& llm = status["llm"];
+        std::cout << "LLM model: " << llm.value("model", std::string("unknown")) << '\n';
+        std::cout << "LLM base URL: " << llm.value("base_url", std::string("unknown")) << '\n';
+        std::cout << "LLM mock mode: " << (llm.value("mock_mode", true) ? "enabled" : "disabled") << '\n';
+    }
+
     auto planner = std::make_shared<evoclaw::agent::Planner>(
         make_config("planner-1", "planner", {"plan", "decompose"}));
     auto executor = std::make_shared<evoclaw::agent::Executor>(

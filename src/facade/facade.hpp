@@ -4,6 +4,7 @@
 #include "evolution/evolver.hpp"
 #include "event_log/event_log.hpp"
 #include "governance/governance_kernel.hpp"
+#include "llm/llm_client.hpp"
 #include "memory/org_log.hpp"
 #include "memory/working_memory.hpp"
 #include "protocol/bus.hpp"
@@ -56,6 +57,7 @@ private:
     std::unique_ptr<event_log::EventLog> event_log_;
     std::unique_ptr<governance::GovernanceKernel> governance_;
     std::unique_ptr<evolution::Evolver> evolver_;
+    std::shared_ptr<llm::LLMClient> llm_client_;
 
     std::unordered_map<AgentId, std::shared_ptr<agent::Agent>> agents_;
     nlohmann::json last_evolution_report_;

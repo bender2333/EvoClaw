@@ -52,6 +52,95 @@ bool has_all_tools(const std::vector<std::string>& declared, const std::vector<s
     return true;
 }
 
+std::vector<std::string> read_string_list(const nlohmann::json& value) {
+    std::vector<std::string> values;
+    if (value.is_string()) {
+        const auto parsed = value.get<std::string>();
+        if (!parsed.empty()) {
+            values.push_back(parsed);
+        }
+        return values;
+    }
+
+    if (!value.is_array()) {
+        return values;
+    }
+
+    for (const auto& item : value) {
+        if (item.is_string()) {
+            const auto parsed = item.get<std::string>();
+            if (!parsed.empty()) {
+                values.push_back(parsed);
+            }
+        }
+    }
+    return values;
+}
+
+void append_if_present(std::vector<std::string>* out, const nlohmann::json& context, const std::string& key) {
+    if (!context.contains(key)) {
+        return;
+    }
+    auto parsed = read_string_list(context[key]);
+    out->insert(out->end(), parsed.begin(), parsed.end());
+}
+
+bool is_subset_of(const std::vector<std::string>& subset, const std::vector<std::string>& superset) {
+    for (const auto& item : subset) {
+        if (std::find(superset.begin(), superset.end(), item) == superset.end()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool passes_airbag_runtime_check(const agent::Agent& agent, const agent::Task& task) {
+    const auto& airbag = agent.contract().airbag;
+
+    std::vector<std::string> requested_permissions;
+    append_if_present(&requested_permissions, task.context, "permissions");
+    append_if_present(&requested_permissions, task.context, "required_permissions");
+    append_if_present(&requested_permissions, task.context, "requested_permissions");
+
+    std::vector<std::string> requested_scopes;
+    append_if_present(&requested_scopes, task.context, "scope");
+    append_if_present(&requested_scopes, task.context, "requested_scope");
+    append_if_present(&requested_scopes, task.context, "blast_radius_scope");
+
+    if (airbag.level == umi::AirbagLevel::MAXIMUM) {
+        if (!requested_permissions.empty()) {
+            return false;
+        }
+
+        if (!requested_scopes.empty()) {
+            if (airbag.blast_radius_scope.empty()) {
+                return false;
+            }
+            return is_subset_of(requested_scopes, airbag.blast_radius_scope);
+        }
+        return true;
+    }
+
+    if (!airbag.permission_whitelist.empty() &&
+        !is_subset_of(requested_permissions, airbag.permission_whitelist)) {
+        return false;
+    }
+
+    if (!airbag.blast_radius_scope.empty() &&
+        !is_subset_of(requested_scopes, airbag.blast_radius_scope)) {
+        return false;
+    }
+
+    if (task.context.contains("requires_reversible") &&
+        task.context["requires_reversible"].is_boolean() &&
+        task.context["requires_reversible"].get<bool>() &&
+        !airbag.reversible) {
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 Router::Router(RoutingConfig config)
@@ -110,7 +199,23 @@ std::optional<AgentId> Router::route(const agent::Task& task) {
         }
     }
 
-    AgentId chosen = pick_candidate(intent, std::move(candidates));
+    std::vector<AgentId> allowed_candidates;
+    allowed_candidates.reserve(candidates.size());
+    for (const auto& candidate : candidates) {
+        const auto agent_it = agents_.find(candidate);
+        if (agent_it == agents_.end() || !agent_it->second) {
+            continue;
+        }
+        if (passes_airbag_runtime_check(*agent_it->second, task)) {
+            allowed_candidates.push_back(candidate);
+        }
+    }
+
+    if (allowed_candidates.empty()) {
+        return std::nullopt;
+    }
+
+    AgentId chosen = pick_candidate(intent, std::move(allowed_candidates));
     if (chosen.empty()) {
         return std::nullopt;
     }
