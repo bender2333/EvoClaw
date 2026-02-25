@@ -15,6 +15,24 @@ using TaskId = std::string;
 using ModuleId = std::string;
 using Timestamp = std::chrono::system_clock::time_point;
 
+enum class TaskType {
+    ROUTE,
+    EXECUTE,
+    CRITIQUE,
+    SYNTHESIZE,
+    EVOLVE
+};
+
+enum class TaskState {
+    PENDING,
+    PLANNING,
+    EXECUTING,
+    EVALUATING,
+    COMPLETED,
+    FAILED,
+    RETRY_NEEDED
+};
+
 inline Timestamp now() {
     return std::chrono::system_clock::now();
 }

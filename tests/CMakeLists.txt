@@ -14,6 +14,8 @@ add_executable(evoclaw_test
     test_core.cpp
     test_protocol.cpp
     test_umi.cpp
+    test_agent.cpp
+    test_router.cpp
 )
 
 target_link_libraries(evoclaw_test PRIVATE evoclaw_core GTest::gtest_main)
