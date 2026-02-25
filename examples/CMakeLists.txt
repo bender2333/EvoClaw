@@ -3,3 +3,6 @@ target_link_libraries(evoclaw_basic_usage PRIVATE evoclaw_core)
 
 add_executable(evoclaw_evolution_demo evolution_demo.cpp)
 target_link_libraries(evoclaw_evolution_demo PRIVATE evoclaw_core)
+
+add_executable(evoclaw_server_demo server_demo.cpp)
+target_link_libraries(evoclaw_server_demo PRIVATE evoclaw_core)

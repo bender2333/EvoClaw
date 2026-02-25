@@ -33,6 +33,7 @@ set(EVOLCLAW_SOURCES
     src/memory/working_memory.cpp
     src/protocol/bus.cpp
     src/router/router.cpp
+    src/server/server.cpp
 )
 add_library(evoclaw_core ${EVOLCLAW_SOURCES})
 target_include_directories(evoclaw_core PUBLIC src)

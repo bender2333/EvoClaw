@@ -14,7 +14,9 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -22,6 +24,8 @@ namespace evoclaw::facade {
 
 class EvoClawFacade {
 public:
+    using EventCallback = std::function<void(const nlohmann::json&)>;
+
     struct Config {
         std::filesystem::path log_dir = "./logs";
         std::filesystem::path config_path = "./constitution.json";
@@ -33,6 +37,7 @@ public:
     EvoClawFacade();
 
     void initialize();
+    void set_event_callback(EventCallback callback);
     void register_agent(std::shared_ptr<agent::Agent> agent);
     [[nodiscard]] agent::TaskResult submit_task(const agent::Task& task);
     void trigger_evolution();
@@ -54,8 +59,11 @@ private:
 
     std::unordered_map<AgentId, std::shared_ptr<agent::Agent>> agents_;
     nlohmann::json last_evolution_report_;
+    EventCallback event_callback_;
+    mutable std::mutex event_callback_mutex_;
 
     static governance::Constitution load_constitution(const std::filesystem::path& path);
+    void emit_event(nlohmann::json event);
     void run_evolution_cycle();
     void ensure_initialized() const;
 };

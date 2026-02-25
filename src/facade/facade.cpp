@@ -38,6 +38,22 @@ std::string evolution_type_to_string(const evolution::EvolutionType type) {
     return "unknown";
 }
 
+std::string task_type_to_string(const TaskType type) {
+    switch (type) {
+        case TaskType::ROUTE:
+            return "route";
+        case TaskType::EXECUTE:
+            return "execute";
+        case TaskType::CRITIQUE:
+            return "critique";
+        case TaskType::SYNTHESIZE:
+            return "synthesize";
+        case TaskType::EVOLVE:
+            return "evolve";
+    }
+    return "unknown";
+}
+
 double extract_critic_score(const agent::Task& task, const agent::TaskResult& result) {
     if (result.metadata.contains("score") && result.metadata["score"].is_number()) {
         return std::clamp(result.metadata["score"].get<double>(), 0.0, 1.0);
@@ -96,6 +112,11 @@ void EvoClawFacade::initialize() {
     initialized_ = true;
 }
 
+void EvoClawFacade::set_event_callback(EventCallback callback) {
+    std::lock_guard<std::mutex> lock(event_callback_mutex_);
+    event_callback_ = std::move(callback);
+}
+
 void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent) {
     ensure_initialized();
     if (!agent) {
@@ -123,10 +144,27 @@ void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent) {
         {"subscriber_count", bus_->subscriber_count()}
     };
     event_log_->append(std::move(event));
+
+    emit_event({
+        {"event", "agent_registered"},
+        {"agent_id", agent_id},
+        {"agent_count", agents_.size()},
+        {"subscriber_count", bus_->subscriber_count()},
+        {"message", "Agent " + agent_id + " registered"}
+    });
 }
 
 agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
     ensure_initialized();
+
+    emit_event({
+        {"event", "task_submitted"},
+        {"task_id", task.id},
+        {"description", task.description},
+        {"task_type", task_type_to_string(task.type)},
+        {"context", task.context},
+        {"message", "Task " + task.id + " submitted"}
+    });
 
     agent::TaskResult failed;
     failed.task_id = task.id;
@@ -144,6 +182,14 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
         event.action = "route_failed";
         event.details = {{"description", task.description}, {"context", task.context}};
         event_log_->append(std::move(event));
+
+        emit_event({
+            {"event", "task_failed"},
+            {"task_id", task.id},
+            {"description", task.description},
+            {"reason", "router_no_match"},
+            {"message", "Task " + task.id + " failed: no agent available"}
+        });
         return failed;
     }
 
@@ -159,6 +205,14 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
         event.action = "agent_missing";
         event.details = {{"agent_id", *routed_agent}};
         event_log_->append(std::move(event));
+
+        emit_event({
+            {"event", "task_failed"},
+            {"task_id", task.id},
+            {"agent_id", *routed_agent},
+            {"reason", "agent_missing"},
+            {"message", "Task " + task.id + " failed: routed agent missing"}
+        });
         return failed;
     }
 
@@ -193,6 +247,18 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
     event.action = result.success ? "task_completed" : "task_failed";
     event.details = make_event_details(task, result, duration_ms, critic_score);
     event_log_->append(std::move(event));
+
+    emit_event({
+        {"event", result.success ? "task_complete" : "task_failed"},
+        {"task_id", task.id},
+        {"agent_id", org_entry.agent_id},
+        {"success", result.success},
+        {"confidence", result.confidence},
+        {"critic_score", critic_score},
+        {"duration_ms", duration_ms},
+        {"metadata", result.metadata},
+        {"message", result.success ? "Task " + task.id + " completed" : "Task " + task.id + " failed"}
+    });
 
     return result;
 }
@@ -286,6 +352,11 @@ governance::Constitution EvoClawFacade::load_constitution(const std::filesystem:
 }
 
 void EvoClawFacade::run_evolution_cycle() {
+    emit_event({
+        {"event", "evolution_started"},
+        {"message", "Evolution cycle started"}
+    });
+
     const std::vector<evolution::Tension> tensions = evolver_->monitor(*org_log_);
     const std::vector<evolution::EvolutionProposal> proposals = evolver_->propose(tensions);
 
@@ -320,6 +391,16 @@ void EvoClawFacade::run_evolution_cycle() {
             {"severity", tension.severity}
         };
         event_log_->append(std::move(tension_event));
+
+        emit_event({
+            {"event", "tension_detected"},
+            {"tension_id", tension.id},
+            {"type", tension_type_to_string(tension.type)},
+            {"source_agent", tension.source_agent},
+            {"description", tension.description},
+            {"severity", tension.severity},
+            {"message", "Tension detected: " + tension.description}
+        });
     }
 
     for (const auto& proposal : proposals) {
@@ -381,9 +462,53 @@ void EvoClawFacade::run_evolution_cycle() {
             {"p_value", test_result.p_value}
         };
         event_log_->append(std::move(proposal_event));
+
+        emit_event({
+            {"event", applied ? "proposal_applied" : "proposal_rejected"},
+            {"proposal_id", proposal.id},
+            {"type", evolution_type_to_string(proposal.type)},
+            {"target_agent", proposal.target_agent},
+            {"improvement", test_result.improvement},
+            {"significant", test_result.significant},
+            {"p_value", test_result.p_value},
+            {"message", applied ? ("Proposal " + proposal.id + " applied")
+                                : ("Proposal " + proposal.id + " rejected")}
+        });
     }
 
     last_evolution_report_ = std::move(report);
+
+    emit_event({
+        {"event", "evolution_completed"},
+        {"tension_count", last_evolution_report_.value("tension_count", 0)},
+        {"proposal_count", last_evolution_report_.value("proposal_count", 0)},
+        {"applied_count", last_evolution_report_.value("applied_count", 0)},
+        {"tensions", last_evolution_report_.value("tensions", json::array())},
+        {"proposals", last_evolution_report_.value("proposals", json::array())},
+        {"message", "Evolution cycle completed"}
+    });
+}
+
+void EvoClawFacade::emit_event(json event) {
+    EventCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(event_callback_mutex_);
+        callback = event_callback_;
+    }
+
+    if (!callback) {
+        return;
+    }
+
+    if (!event.contains("timestamp")) {
+        event["timestamp"] = timestamp_to_string(now());
+    }
+
+    try {
+        callback(event);
+    } catch (...) {
+        // Callback exceptions are ignored to keep facade behavior stable.
+    }
 }
 
 void EvoClawFacade::ensure_initialized() const {
