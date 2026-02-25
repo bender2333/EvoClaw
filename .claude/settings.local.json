@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx bmad-method:*)"
+      "Bash(npx bmad-method:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
