@@ -1,5 +1,7 @@
 #include "router/router.hpp"
 
+#include "zone/zone_manager.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <unordered_set>
@@ -147,6 +149,20 @@ Router::Router(RoutingConfig config)
     : config_(std::move(config)),
       rng_(std::random_device{}()) {}
 
+void Router::set_zone_manager(const zone::ZoneManager* zone_manager) {
+    zone_manager_ = zone_manager;
+}
+
+void Router::configure_cold_start_perturbation(std::vector<AgentId> agent_ids, const double traffic_ratio) {
+    perturbation_targets_.clear();
+    for (auto& agent_id : agent_ids) {
+        if (!agent_id.empty()) {
+            perturbation_targets_.insert(std::move(agent_id));
+        }
+    }
+    perturbation_ratio_ = std::clamp(traffic_ratio, 0.0, 1.0);
+}
+
 void Router::register_agent(const std::shared_ptr<agent::Agent>& agent) {
     register_agent(agent, now());
 }
@@ -159,6 +175,7 @@ void Router::register_agent(const std::shared_ptr<agent::Agent>& agent, Timestam
     const AgentId agent_id = agent->id();
     agents_[agent_id] = agent;
     registration_time_[agent_id] = registered_at;
+    route_count_by_agent_.try_emplace(agent_id, 0U);
 
     const auto& capability = agent->contract().capability;
     for (const auto& intent : capability.intent_tags) {
@@ -206,7 +223,8 @@ std::optional<AgentId> Router::route(const agent::Task& task) {
         if (agent_it == agents_.end() || !agent_it->second) {
             continue;
         }
-        if (passes_airbag_runtime_check(*agent_it->second, task)) {
+        if (passes_airbag_runtime_check(*agent_it->second, task) &&
+            can_receive_task(candidate, task)) {
             allowed_candidates.push_back(candidate);
         }
     }
@@ -219,6 +237,15 @@ std::optional<AgentId> Router::route(const agent::Task& task) {
     if (chosen.empty()) {
         return std::nullopt;
     }
+
+    double rounds = 1.0;
+    if (task.context.contains("task_rounds") && task.context["task_rounds"].is_number()) {
+        rounds = std::max(1.0, task.context["task_rounds"].get<double>());
+    } else if (task.context.contains("rounds") && task.context["rounds"].is_number()) {
+        rounds = std::max(1.0, task.context["rounds"].get<double>());
+    }
+    record_routing_observation(chosen, rounds);
+
     return chosen;
 }
 
@@ -232,7 +259,11 @@ AgentId Router::route_with_exploration(const std::string& intent) {
     for (const auto& [id, _] : agents_) {
         candidates.push_back(id);
     }
-    return pick_candidate(intent, std::move(candidates));
+    const AgentId selected = pick_candidate(intent, std::move(candidates));
+    if (!selected.empty()) {
+        record_routing_observation(selected, 1.0);
+    }
+    return selected;
 }
 
 std::vector<AgentId> Router::match_by_contract(const umi::CapabilityProfile& required) const {
@@ -302,6 +333,28 @@ AgentId Router::pick_candidate(const std::string& intent, std::vector<AgentId> c
         }
     }
 
+    if (!perturbation_targets_.empty() && perturbation_ratio_ > 0.0) {
+        std::vector<AgentId> perturbation_candidates;
+        perturbation_candidates.reserve(candidates.size());
+        for (const auto& candidate : candidates) {
+            if (perturbation_targets_.contains(candidate)) {
+                perturbation_candidates.push_back(candidate);
+            }
+        }
+
+        if (!perturbation_candidates.empty()) {
+            std::uniform_real_distribution<double> dist(0.0, 1.0);
+            if (dist(rng_) < perturbation_ratio_) {
+                const AgentId selected = choose_random(perturbation_candidates);
+                ++routed_count_;
+                if (is_cold_start(selected)) {
+                    ++cold_start_routed_count_;
+                }
+                return selected;
+            }
+        }
+    }
+
     if (!cold_candidates.empty() && config_.cold_start_quota > 0.0) {
         const double cold_ratio = routed_count_ == 0
                                       ? 0.0
@@ -359,6 +412,82 @@ AgentId Router::pick_candidate(const std::string& intent, std::vector<AgentId> c
     }
 
     return selected;
+}
+
+bool Router::can_receive_task(const AgentId& agent_id, const agent::Task& task) const {
+    if (!zone_manager_) {
+        return true;
+    }
+
+    const auto zone = zone_manager_->get_zone(agent_id);
+    if (zone != zone::Zone::EXPLORATION) {
+        return true;
+    }
+
+    if (task.context.contains("allow_exploration_zone") &&
+        task.context["allow_exploration_zone"].is_boolean() &&
+        task.context["allow_exploration_zone"].get<bool>()) {
+        return true;
+    }
+
+    if (task.context.contains("caller_zone") && task.context["caller_zone"].is_string()) {
+        const auto caller_zone = task.context["caller_zone"].get<std::string>();
+        if (caller_zone == "stable") {
+            return true;
+        }
+    }
+
+    if (task.context.contains("internal_call") &&
+        task.context["internal_call"].is_boolean() &&
+        task.context["internal_call"].get<bool>()) {
+        return true;
+    }
+
+    return false;
+}
+
+void Router::record_routing_observation(const AgentId& agent_id, const double task_rounds) {
+    if (agent_id.empty()) {
+        return;
+    }
+
+    route_count_by_agent_[agent_id] += 1U;
+    last_routed_by_agent_[agent_id] = now();
+    total_task_rounds_ += std::max(task_rounds, 1.0);
+    ++observed_task_count_;
+}
+
+std::vector<AgentId> Router::registered_agents() const {
+    std::vector<AgentId> ids;
+    ids.reserve(agents_.size());
+    for (const auto& [agent_id, _] : agents_) {
+        ids.push_back(agent_id);
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+std::unordered_map<AgentId, std::size_t> Router::routing_counts() const {
+    return route_count_by_agent_;
+}
+
+std::unordered_map<AgentId, Timestamp> Router::last_routed_at() const {
+    return last_routed_by_agent_;
+}
+
+std::size_t Router::routed_count() const {
+    return routed_count_;
+}
+
+std::size_t Router::cold_start_routed_count() const {
+    return cold_start_routed_count_;
+}
+
+double Router::average_task_rounds() const {
+    if (observed_task_count_ == 0U) {
+        return 0.0;
+    }
+    return total_task_rounds_ / static_cast<double>(observed_task_count_);
 }
 
 nlohmann::json Router::get_capability_matrix() const {

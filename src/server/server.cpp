@@ -156,6 +156,30 @@ void EvoClawServer::setup_routes() {
         }
     });
 
+    server_.Get("/api/zones", [this](const httplib::Request&, httplib::Response& res) {
+        try {
+            set_json_response(res, facade_.get_zone_status());
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
+    server_.Get("/api/patterns", [this](const httplib::Request&, httplib::Response& res) {
+        try {
+            set_json_response(res, facade_.get_pattern_status());
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
+    server_.Get("/api/entropy", [this](const httplib::Request&, httplib::Response& res) {
+        try {
+            set_json_response(res, facade_.get_entropy_status());
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
     server_.Post("/api/task", [this](const httplib::Request& req, httplib::Response& res) {
         json body;
         try {

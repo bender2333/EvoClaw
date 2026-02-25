@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -97,6 +98,10 @@ void EvoClawFacade::initialize() {
     bus_ = std::make_shared<protocol::MessageBus>();
     router_ = std::make_unique<router::Router>(config_.router_config);
     org_log_ = std::make_unique<memory::OrgLog>(config_.log_dir);
+    zone_manager_ = std::make_unique<zone::ZoneManager>();
+    router_->set_zone_manager(zone_manager_.get());
+    compiler_ = std::make_unique<compiler::Compiler>(*org_log_);
+    entropy_monitor_ = std::make_unique<entropy::EntropyMonitor>(*router_);
     event_log_ = std::make_unique<event_log::EventLog>(config_.log_dir / "event_log.jsonl");
 
     governance_ = std::make_unique<governance::GovernanceKernel>(load_constitution(config_.config_path));
@@ -120,6 +125,10 @@ void EvoClawFacade::set_event_callback(EventCallback callback) {
 }
 
 void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent) {
+    register_agent(std::move(agent), zone::Zone::STABLE);
+}
+
+void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent, const zone::Zone zone) {
     ensure_initialized();
     if (!agent) {
         throw std::invalid_argument("register_agent requires a non-null agent");
@@ -137,6 +146,9 @@ void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent) {
 
     router_->register_agent(agent);
     const auto agent_id = agent->id();
+    if (zone_manager_) {
+        zone_manager_->assign_zone(agent_id, zone);
+    }
     agents_[agent_id] = std::move(agent);
 
     event_log::Event event;
@@ -146,13 +158,15 @@ void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent) {
     event.action = "register_agent";
     event.details = {
         {"agent_count", agents_.size()},
-        {"subscriber_count", bus_->subscriber_count()}
+        {"subscriber_count", bus_->subscriber_count()},
+        {"zone", zone::zone_to_string(zone)}
     };
     event_log_->append(std::move(event));
 
     emit_event({
         {"event", "agent_registered"},
         {"agent_id", agent_id},
+        {"zone", zone::zone_to_string(zone)},
         {"agent_count", agents_.size()},
         {"subscriber_count", bus_->subscriber_count()},
         {"message", "Agent " + agent_id + " registered"}
@@ -221,9 +235,28 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
         return failed;
     }
 
+    agent::Task effective_task = task;
+    if (zone_manager_) {
+        const zone::ZonePolicy policy = zone_manager_->get_policy(agent_it->second->id());
+        if (policy.token_budget_ratio > 0.0 &&
+            policy.token_budget_ratio < 1.0 &&
+            effective_task.budget.max_tokens > 0) {
+            const double scaled_tokens = std::floor(static_cast<double>(effective_task.budget.max_tokens) *
+                                                    policy.token_budget_ratio);
+            effective_task.budget.max_tokens = std::max(1, static_cast<int>(scaled_tokens));
+        }
+    }
+
     const auto start = std::chrono::steady_clock::now();
-    agent::TaskResult result = agent_it->second->execute(task);
+    agent::TaskResult result = agent_it->second->execute(effective_task);
     const auto end = std::chrono::steady_clock::now();
+
+    if (zone_manager_) {
+        zone_manager_->record_result(agent_it->second->id(), result.success);
+        if (zone_manager_->is_promotion_eligible(agent_it->second->id())) {
+            zone_manager_->promote_to_stable(agent_it->second->id());
+        }
+    }
 
     // Record token consumption to budget tracker
     if (budget_tracker_) {
@@ -248,6 +281,7 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
     org_entry.metadata = {
         {"description", task.description},
         {"context", task.context},
+        {"effective_budget_max_tokens", effective_task.budget.max_tokens},
         {"success", result.success},
         {"confidence", result.confidence},
         {"result_metadata", result.metadata}
@@ -303,7 +337,10 @@ nlohmann::json EvoClawFacade::get_status() const {
                              }},
         {"org_log_entries", org_entries},
         {"event_log_integrity", (event_log_ ? event_log_->verify_integrity() : true)},
-        {"evolution", {{"last_cycle", last_evolution_report_}}}
+        {"evolution", {{"last_cycle", last_evolution_report_}}},
+        {"zones", get_zone_status()},
+        {"patterns", get_pattern_status()},
+        {"entropy", get_entropy_status()}
     };
 }
 
@@ -375,6 +412,17 @@ governance::Constitution EvoClawFacade::load_constitution(const std::filesystem:
 }
 
 void EvoClawFacade::run_evolution_cycle() {
+    const auto anti_entropy_actions = entropy_monitor_
+                                          ? entropy_monitor_->suggest_actions()
+                                          : std::vector<entropy::AntiEntropyAction>{};
+    if (entropy_monitor_ && router_) {
+        for (const auto& action : anti_entropy_actions) {
+            if (action.type == "cold_start_perturbation") {
+                entropy_monitor_->apply_cold_start_perturbation(*router_, 0.05);
+            }
+        }
+    }
+
     emit_event({
         {"event", "evolution_started"},
         {"message", "Evolution cycle started"}
@@ -388,9 +436,18 @@ void EvoClawFacade::run_evolution_cycle() {
         {"tension_count", tensions.size()},
         {"proposal_count", proposals.size()},
         {"applied_count", 0},
+        {"anti_entropy_actions", json::array()},
         {"tensions", json::array()},
         {"proposals", json::array()}
     };
+
+    for (const auto& action : anti_entropy_actions) {
+        report["anti_entropy_actions"].push_back({
+            {"type", action.type},
+            {"description", action.description},
+            {"details", action.details}
+        });
+    }
 
     for (const auto& tension : tensions) {
         report["tensions"].push_back({
@@ -535,7 +592,8 @@ void EvoClawFacade::emit_event(json event) {
 }
 
 void EvoClawFacade::ensure_initialized() const {
-    if (!initialized_ || !bus_ || !router_ || !org_log_ || !event_log_ || !governance_ || !evolver_) {
+    if (!initialized_ || !bus_ || !router_ || !org_log_ || !zone_manager_ || !compiler_ ||
+        !entropy_monitor_ || !event_log_ || !governance_ || !evolver_) {
         throw std::runtime_error("EvoClawFacade is not initialized");
     }
 }
@@ -558,6 +616,33 @@ nlohmann::json EvoClawFacade::get_evolution_budget_status() const {
         return status["evolution"];
     }
     return nlohmann::json{{"status", "no evolution data"}};
+}
+
+nlohmann::json EvoClawFacade::get_zone_status() const {
+    if (!zone_manager_) {
+        return nlohmann::json{{"error", "zone manager not initialized"}};
+    }
+    return zone_manager_->status();
+}
+
+nlohmann::json EvoClawFacade::get_pattern_status() const {
+    if (!compiler_) {
+        return nlohmann::json{{"error", "compiler not initialized"}};
+    }
+
+    const auto detected = compiler_->detect_patterns();
+    for (const auto& pattern : detected) {
+        const auto compiled_pattern = compiler_->compile(pattern);
+        (void)compiled_pattern;
+    }
+    return compiler_->status();
+}
+
+nlohmann::json EvoClawFacade::get_entropy_status() const {
+    if (!entropy_monitor_) {
+        return nlohmann::json{{"error", "entropy monitor not initialized"}};
+    }
+    return entropy_monitor_->status();
 }
 
 } // namespace evoclaw::facade

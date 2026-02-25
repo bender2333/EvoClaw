@@ -26,6 +26,8 @@ set(EVOLCLAW_SOURCES
     src/agent/executor.cpp
     src/agent/planner.cpp
     src/budget/budget_tracker.cpp
+    src/compiler/compiler.cpp
+    src/entropy/entropy_monitor.cpp
     src/event_log/event_log.cpp
     src/evolution/evolution_budget.cpp
     src/evolution/evolver.cpp
@@ -38,6 +40,7 @@ set(EVOLCLAW_SOURCES
     src/router/router.cpp
     src/server/server.cpp
     src/slp/semantic_primitive.cpp
+    src/zone/zone_manager.cpp
 )
 add_library(evoclaw_core ${EVOLCLAW_SOURCES})
 target_include_directories(evoclaw_core PUBLIC src)

@@ -2,6 +2,8 @@
 
 #include "agent/agent.hpp"
 #include "budget/budget_tracker.hpp"
+#include "compiler/compiler.hpp"
+#include "entropy/entropy_monitor.hpp"
 #include "evolution/evolver.hpp"
 #include "event_log/event_log.hpp"
 #include "governance/governance_kernel.hpp"
@@ -11,6 +13,7 @@
 #include "protocol/bus.hpp"
 #include "router/router.hpp"
 #include "slp/semantic_primitive.hpp"
+#include "zone/zone_manager.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -43,12 +46,16 @@ public:
     void initialize();
     void set_event_callback(EventCallback callback);
     void register_agent(std::shared_ptr<agent::Agent> agent);
+    void register_agent(std::shared_ptr<agent::Agent> agent, zone::Zone zone);
     [[nodiscard]] agent::TaskResult submit_task(const agent::Task& task);
     void trigger_evolution();
     [[nodiscard]] nlohmann::json get_status() const;
     [[nodiscard]] nlohmann::json get_budget_report() const;
     [[nodiscard]] nlohmann::json get_evolution_budget_status() const;
     [[nodiscard]] nlohmann::json get_capability_matrix() const;
+    [[nodiscard]] nlohmann::json get_zone_status() const;
+    [[nodiscard]] nlohmann::json get_pattern_status() const;
+    [[nodiscard]] nlohmann::json get_entropy_status() const;
     [[nodiscard]] bool verify_event_log() const;
 
 private:
@@ -59,6 +66,9 @@ private:
     std::unique_ptr<router::Router> router_;
     std::unique_ptr<memory::WorkingMemory> working_memory_;
     std::unique_ptr<memory::OrgLog> org_log_;
+    std::unique_ptr<zone::ZoneManager> zone_manager_;
+    std::unique_ptr<compiler::Compiler> compiler_;
+    std::unique_ptr<entropy::EntropyMonitor> entropy_monitor_;
     std::unique_ptr<event_log::EventLog> event_log_;
     std::unique_ptr<governance::GovernanceKernel> governance_;
     std::unique_ptr<evolution::Evolver> evolver_;

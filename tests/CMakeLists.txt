@@ -23,6 +23,9 @@ add_executable(evoclaw_test
     test_llm.cpp
     test_budget.cpp
     test_slp.cpp
+    test_zone.cpp
+    test_compiler.cpp
+    test_entropy.cpp
     test_integration.cpp
 )
 
