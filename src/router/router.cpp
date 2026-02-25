@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <unordered_set>
 #include <utility>
 
@@ -294,6 +295,58 @@ std::vector<AgentId> Router::match_by_contract(const umi::CapabilityProfile& req
     return matches;
 }
 
+void Router::save_matrix(const std::filesystem::path& path) const {
+    if (path.empty()) {
+        return;
+    }
+
+    std::error_code ec;
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path(), ec);
+    }
+
+    nlohmann::json payload = {
+        {"version", "1.0"},
+        {"saved_at", timestamp_to_string(now())},
+        {"matrix", matrix_.snapshot()}
+    };
+
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        return;
+    }
+    out << payload.dump(2);
+}
+
+void Router::load_matrix(const std::filesystem::path& path) {
+    if (path.empty()) {
+        return;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) {
+        return;
+    }
+
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return;
+    }
+
+    nlohmann::json parsed;
+    try {
+        in >> parsed;
+    } catch (...) {
+        return;
+    }
+
+    if (!parsed.is_object() || !parsed.contains("matrix")) {
+        return;
+    }
+
+    matrix_.load_snapshot(parsed["matrix"]);
+}
+
 bool Router::is_cold_start(const AgentId& agent) const {
     const auto it = registration_time_.find(agent);
     if (it == registration_time_.end() || config_.cold_start_days <= 0) {
@@ -491,15 +544,7 @@ double Router::average_task_rounds() const {
 }
 
 nlohmann::json Router::get_capability_matrix() const {
-    // 简化返回，实际应该序列化 matrix_ 的内容
-    nlohmann::json j = nlohmann::json::object();
-    for (const auto& [agent_id, agent_ptr] : agents_) {
-        j[agent_id] = {
-            {"contract", agent_ptr->contract().module_id},
-            {"role", agent_ptr->role()}
-        };
-    }
-    return j;
+    return matrix_.snapshot();
 }
 
 } // namespace evoclaw::router

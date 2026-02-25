@@ -17,6 +17,7 @@ add_executable(evoclaw_test
     test_agent.cpp
     test_router.cpp
     test_memory.cpp
+    test_org_log_query.cpp
     test_event_log.cpp
     test_governance.cpp
     test_evolution.cpp
@@ -27,6 +28,7 @@ add_executable(evoclaw_test
     test_compiler.cpp
     test_entropy.cpp
     test_integration.cpp
+    test_matrix_persistence.cpp
 )
 
 target_link_libraries(evoclaw_test PRIVATE evoclaw_core GTest::gtest_main)

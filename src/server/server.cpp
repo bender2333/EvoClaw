@@ -6,7 +6,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <ctime>
+#include <iomanip>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -42,6 +49,88 @@ std::string event_message(const json& event) {
     }
 
     return event.dump();
+}
+
+std::optional<Timestamp> parse_iso8601_timestamp(std::string value) {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    int offset_seconds = 0;
+    bool has_utc_offset = false;
+
+    if (!value.empty() && (value.back() == 'Z' || value.back() == 'z')) {
+        has_utc_offset = true;
+        value.pop_back();
+    } else {
+        const std::size_t tz_pos = value.find_last_of("+-");
+        if (tz_pos != std::string::npos && tz_pos > 10) {
+            const std::string offset = value.substr(tz_pos);
+            const int sign = offset[0] == '-' ? -1 : 1;
+            int hours = 0;
+            int minutes = 0;
+
+            bool parsed = false;
+            if (offset.size() == 6 && offset[3] == ':') {
+                parsed = std::sscanf(offset.c_str() + 1, "%2d:%2d", &hours, &minutes) == 2;
+            } else if (offset.size() == 5) {
+                parsed = std::sscanf(offset.c_str() + 1, "%2d%2d", &hours, &minutes) == 2;
+            }
+
+            if (parsed) {
+                has_utc_offset = true;
+                offset_seconds = sign * ((hours * 3600) + (minutes * 60));
+                value = value.substr(0, tz_pos);
+            }
+        }
+    }
+
+    if (value.size() > 19 && value[19] == '.') {
+        value = value.substr(0, 19);
+    }
+
+    std::tm tm{};
+    std::istringstream stream(value);
+    stream >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (stream.fail()) {
+        return std::nullopt;
+    }
+
+    std::time_t time_value = 0;
+    if (has_utc_offset) {
+#if defined(_WIN32)
+        time_value = _mkgmtime(&tm);
+#else
+        time_value = timegm(&tm);
+#endif
+        time_value -= offset_seconds;
+    } else {
+        time_value = std::mktime(&tm);
+    }
+
+    if (time_value < 0) {
+        return std::nullopt;
+    }
+
+    return std::chrono::system_clock::from_time_t(time_value);
+}
+
+json org_log_entry_to_json(const memory::OrgLogEntry& entry) {
+    const auto timestamp_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(entry.timestamp.time_since_epoch()).count();
+
+    return {
+        {"entry_id", entry.entry_id},
+        {"timestamp", timestamp_to_string(entry.timestamp)},
+        {"timestamp_ms", timestamp_ms},
+        {"task_id", entry.task_id},
+        {"agent_id", entry.agent_id},
+        {"module_version", entry.module_version},
+        {"duration_ms", entry.duration_ms},
+        {"critic_score", entry.critic_score},
+        {"user_feedback_positive", entry.user_feedback_positive},
+        {"metadata", entry.metadata}
+    };
 }
 
 } // namespace
@@ -156,6 +245,104 @@ void EvoClawServer::setup_routes() {
         }
     });
 
+    server_.Get("/api/matrix", [this](const httplib::Request&, httplib::Response& res) {
+        try {
+            set_json_response(res, facade_.get_capability_matrix());
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
+    server_.Get("/api/logs", [this](const httplib::Request& req, httplib::Response& res) {
+        const auto parse_param = [&req](const char* key) -> std::optional<Timestamp> {
+            if (!req.has_param(key)) {
+                return std::nullopt;
+            }
+            return parse_iso8601_timestamp(req.get_param_value(key));
+        };
+
+        const auto start = parse_param("start");
+        if (req.has_param("start") && !start.has_value()) {
+            set_json_response(res, build_error("Invalid ISO8601 'start' parameter"), 400);
+            return;
+        }
+
+        const auto end = parse_param("end");
+        if (req.has_param("end") && !end.has_value()) {
+            set_json_response(res, build_error("Invalid ISO8601 'end' parameter"), 400);
+            return;
+        }
+
+        try {
+            const auto logs = facade_.query_logs(
+                start.value_or(Timestamp::min()),
+                end.value_or(Timestamp::max()));
+
+            json payload;
+            payload["count"] = logs.size();
+            payload["logs"] = json::array();
+            for (const auto& entry : logs) {
+                payload["logs"].push_back(org_log_entry_to_json(entry));
+            }
+
+            if (start.has_value()) {
+                payload["start"] = timestamp_to_string(*start);
+            }
+            if (end.has_value()) {
+                payload["end"] = timestamp_to_string(*end);
+            }
+
+            set_json_response(res, payload);
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
+    server_.Get("/api/logs/stats", [this](const httplib::Request& req, httplib::Response& res) {
+        const auto parse_param = [&req](const char* key) -> std::optional<Timestamp> {
+            if (!req.has_param(key)) {
+                return std::nullopt;
+            }
+            return parse_iso8601_timestamp(req.get_param_value(key));
+        };
+
+        const auto start = parse_param("start");
+        if (req.has_param("start") && !start.has_value()) {
+            set_json_response(res, build_error("Invalid ISO8601 'start' parameter"), 400);
+            return;
+        }
+
+        const auto end = parse_param("end");
+        if (req.has_param("end") && !end.has_value()) {
+            set_json_response(res, build_error("Invalid ISO8601 'end' parameter"), 400);
+            return;
+        }
+
+        try {
+            const auto stats = facade_.get_log_stats(
+                start.value_or(Timestamp::min()),
+                end.value_or(Timestamp::max()));
+
+            json payload = {
+                {"total_tasks", stats.total_tasks},
+                {"successful_tasks", stats.successful_tasks},
+                {"avg_duration_ms", stats.avg_duration_ms},
+                {"avg_critic_score", stats.avg_critic_score},
+                {"tasks_by_agent", stats.tasks_by_agent}
+            };
+            if (start.has_value()) {
+                payload["start"] = timestamp_to_string(*start);
+            }
+            if (end.has_value()) {
+                payload["end"] = timestamp_to_string(*end);
+            }
+
+            set_json_response(res, payload);
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
     server_.Get("/api/zones", [this](const httplib::Request&, httplib::Response& res) {
         try {
             set_json_response(res, facade_.get_zone_status());
@@ -237,6 +424,18 @@ void EvoClawServer::setup_routes() {
             set_json_response(res, {
                 {"ok", true},
                 {"evolution", last_cycle}
+            });
+        } catch (const std::exception& ex) {
+            set_json_response(res, build_error(ex.what()), 500);
+        }
+    });
+
+    server_.Post("/api/matrix/save", [this](const httplib::Request&, httplib::Response& res) {
+        try {
+            facade_.save_state();
+            set_json_response(res, {
+                {"ok", true},
+                {"message", "Matrix state saved"}
             });
         } catch (const std::exception& ex) {
             set_json_response(res, build_error(ex.what()), 500);

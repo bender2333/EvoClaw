@@ -2,6 +2,8 @@
 
 #include "core/types.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <optional>
 #include <shared_mutex>
@@ -84,6 +86,57 @@ public:
             candidates.push_back(cell.agent_id);
         }
         return candidates;
+    }
+
+    [[nodiscard]] nlohmann::json snapshot() const {
+        std::shared_lock lock(mutex_);
+
+        nlohmann::json matrix = nlohmann::json::object();
+        for (const auto& [intent, cells] : matrix_) {
+            for (const auto& cell : cells) {
+                if (cell.agent_id.empty() || intent.empty()) {
+                    continue;
+                }
+                matrix[cell.agent_id][intent] = {
+                    {"score", cell.score},
+                    {"observations", cell.usage_count}
+                };
+            }
+        }
+        return matrix;
+    }
+
+    void load_snapshot(const nlohmann::json& matrix) {
+        if (!matrix.is_object()) {
+            return;
+        }
+
+        std::unique_lock lock(mutex_);
+        matrix_.clear();
+
+        for (auto agent_it = matrix.begin(); agent_it != matrix.end(); ++agent_it) {
+            const auto& agent_id = agent_it.key();
+            const auto& intents_obj = agent_it.value();
+            if (agent_id.empty() || !intents_obj.is_object()) {
+                continue;
+            }
+
+            for (auto intent_it = intents_obj.begin(); intent_it != intents_obj.end(); ++intent_it) {
+                const auto& intent = intent_it.key();
+                const auto& cell_obj = intent_it.value();
+                if (intent.empty() || !cell_obj.is_object()) {
+                    continue;
+                }
+
+                CapabilityCell cell;
+                cell.agent_id = agent_id;
+                cell.intent_tag = intent;
+                cell.score = cell_obj.value("score", 0.0);
+                cell.usage_count = std::max(1, cell_obj.value("observations", 1));
+                cell.last_used = now();
+                matrix_[intent].push_back(std::move(cell));
+            }
+        }
     }
 
 private:

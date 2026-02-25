@@ -63,6 +63,13 @@ std::optional<OrgLogEntry> parse_line(const std::string& line) {
     }
 }
 
+bool is_successful_task(const OrgLogEntry& entry) {
+    if (entry.metadata.contains("success") && entry.metadata["success"].is_boolean()) {
+        return entry.metadata["success"].get<bool>();
+    }
+    return entry.user_feedback_positive;
+}
+
 } // namespace
 
 OrgLog::OrgLog(const std::filesystem::path& log_dir)
@@ -149,6 +156,82 @@ std::vector<OrgLogEntry> OrgLog::query_by_time_range(Timestamp start, Timestamp 
         }
     }
     return results;
+}
+
+std::vector<OrgLogEntry> OrgLog::query_by_agent_and_time(const AgentId& agent_id,
+                                                         Timestamp start,
+                                                         Timestamp end) const {
+    if (agent_id.empty()) {
+        return {};
+    }
+    if (start > end) {
+        std::swap(start, end);
+    }
+
+    std::scoped_lock lock(mutex_);
+    std::ifstream in(log_path_);
+    if (!in.is_open()) {
+        return {};
+    }
+
+    std::vector<OrgLogEntry> results;
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto parsed = parse_line(line);
+        if (!parsed.has_value()) {
+            continue;
+        }
+        if (parsed->agent_id != agent_id) {
+            continue;
+        }
+        if (parsed->timestamp >= start && parsed->timestamp <= end) {
+            results.push_back(*parsed);
+        }
+    }
+
+    return results;
+}
+
+OrgLog::TimeRangeStats OrgLog::get_stats_for_range(Timestamp start, Timestamp end) const {
+    if (start > end) {
+        std::swap(start, end);
+    }
+
+    std::scoped_lock lock(mutex_);
+    std::ifstream in(log_path_);
+    if (!in.is_open()) {
+        return {};
+    }
+
+    TimeRangeStats stats;
+    double duration_sum = 0.0;
+    double score_sum = 0.0;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto parsed = parse_line(line);
+        if (!parsed.has_value()) {
+            continue;
+        }
+        if (parsed->timestamp < start || parsed->timestamp > end) {
+            continue;
+        }
+
+        ++stats.total_tasks;
+        if (is_successful_task(*parsed)) {
+            ++stats.successful_tasks;
+        }
+        duration_sum += parsed->duration_ms;
+        score_sum += parsed->critic_score;
+        stats.tasks_by_agent[parsed->agent_id] += 1;
+    }
+
+    if (stats.total_tasks > 0) {
+        stats.avg_duration_ms = duration_sum / static_cast<double>(stats.total_tasks);
+        stats.avg_critic_score = score_sum / static_cast<double>(stats.total_tasks);
+    }
+
+    return stats;
 }
 
 double OrgLog::average_score(const AgentId& agent) const {

@@ -5,6 +5,7 @@
 #include "umi/contract.hpp"
 
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <random>
@@ -39,6 +40,8 @@ public:
     [[nodiscard]] std::optional<AgentId> route(const agent::Task& task);
     [[nodiscard]] AgentId route_with_exploration(const std::string& intent);
     [[nodiscard]] std::vector<AgentId> match_by_contract(const umi::CapabilityProfile& required) const;
+    void save_matrix(const std::filesystem::path& path) const;
+    void load_matrix(const std::filesystem::path& path);
     [[nodiscard]] nlohmann::json get_capability_matrix() const;
     [[nodiscard]] std::vector<AgentId> registered_agents() const;
     [[nodiscard]] std::unordered_map<AgentId, std::size_t> routing_counts() const;

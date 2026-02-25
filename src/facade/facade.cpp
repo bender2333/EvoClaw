@@ -12,6 +12,11 @@ namespace evoclaw::facade {
 namespace {
 
 using json = nlohmann::json;
+constexpr const char* kMatrixStateFileName = "capability_matrix.json";
+
+std::filesystem::path matrix_state_path(const std::filesystem::path& log_dir) {
+    return log_dir / kMatrixStateFileName;
+}
 
 std::string tension_type_to_string(const evolution::TensionType type) {
     switch (type) {
@@ -97,6 +102,7 @@ void EvoClawFacade::initialize() {
 
     bus_ = std::make_shared<protocol::MessageBus>();
     router_ = std::make_unique<router::Router>(config_.router_config);
+    router_->load_matrix(matrix_state_path(config_.log_dir));
     org_log_ = std::make_unique<memory::OrgLog>(config_.log_dir);
     zone_manager_ = std::make_unique<zone::ZoneManager>();
     router_->set_zone_manager(zone_manager_.get());
@@ -311,9 +317,25 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
     return result;
 }
 
+void EvoClawFacade::save_state() const {
+    ensure_initialized();
+    router_->save_matrix(matrix_state_path(config_.log_dir));
+}
+
 void EvoClawFacade::trigger_evolution() {
     ensure_initialized();
     run_evolution_cycle();
+    save_state();
+}
+
+std::vector<memory::OrgLogEntry> EvoClawFacade::query_logs(Timestamp start, Timestamp end) const {
+    ensure_initialized();
+    return org_log_->query_by_time_range(start, end);
+}
+
+memory::OrgLog::TimeRangeStats EvoClawFacade::get_log_stats(Timestamp start, Timestamp end) const {
+    ensure_initialized();
+    return org_log_->get_stats_for_range(start, end);
 }
 
 nlohmann::json EvoClawFacade::get_status() const {

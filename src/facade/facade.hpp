@@ -25,6 +25,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
 namespace evoclaw::facade {
 
@@ -48,7 +49,10 @@ public:
     void register_agent(std::shared_ptr<agent::Agent> agent);
     void register_agent(std::shared_ptr<agent::Agent> agent, zone::Zone zone);
     [[nodiscard]] agent::TaskResult submit_task(const agent::Task& task);
+    void save_state() const;
     void trigger_evolution();
+    [[nodiscard]] std::vector<memory::OrgLogEntry> query_logs(Timestamp start, Timestamp end) const;
+    [[nodiscard]] memory::OrgLog::TimeRangeStats get_log_stats(Timestamp start, Timestamp end) const;
     [[nodiscard]] nlohmann::json get_status() const;
     [[nodiscard]] nlohmann::json get_budget_report() const;
     [[nodiscard]] nlohmann::json get_evolution_budget_status() const;

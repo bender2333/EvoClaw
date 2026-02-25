@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace evoclaw::memory {
@@ -25,12 +26,24 @@ struct OrgLogEntry {
 
 class OrgLog {
 public:
+    struct TimeRangeStats {
+        int total_tasks = 0;
+        int successful_tasks = 0;
+        double avg_duration_ms = 0.0;
+        double avg_critic_score = 0.0;
+        std::unordered_map<AgentId, int> tasks_by_agent;
+    };
+
     explicit OrgLog(const std::filesystem::path& log_dir);
 
     void append(const OrgLogEntry& entry);
 
     [[nodiscard]] std::vector<OrgLogEntry> query_by_agent(const AgentId& agent, int limit = 100) const;
     [[nodiscard]] std::vector<OrgLogEntry> query_by_time_range(Timestamp start, Timestamp end) const;
+    [[nodiscard]] std::vector<OrgLogEntry> query_by_agent_and_time(const AgentId& agent_id,
+                                                                    Timestamp start,
+                                                                    Timestamp end) const;
+    [[nodiscard]] TimeRangeStats get_stats_for_range(Timestamp start, Timestamp end) const;
     [[nodiscard]] double average_score(const AgentId& agent) const;
     [[nodiscard]] std::vector<OrgLogEntry> all_entries() const;
 
