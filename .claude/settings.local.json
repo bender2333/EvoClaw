@@ -16,7 +16,8 @@
       "Bash(git config user.name \"bender\" && git config user.email \"bender@localhost\")",
       "Bash(git add _bmad/ && git commit -m \"feat: add BMAD framework \\(bmm module + core workflows\\)\")",
       "Bash(git add _bmad-output/ && git commit -m \"docs: add PRD and architecture design \\(BMAD workflow output\\)\")",
-      "Bash(git add doc_design/ && git commit -m \"docs: add A2A protocol research and QA design documents\")"
+      "Bash(git add doc_design/ && git commit -m \"docs: add A2A protocol research and QA design documents\")",
+      "Bash(git add _bmad-output/planning-artifacts/prd.md _bmad-output/planning-artifacts/architecture.md && git commit -m \"$\\(cat <<'EOF'\ndocs: PRD back-sync \\(SYNC-1/2/3\\) and add one-shot completion feedback loop \\(FR64-FR68\\)\n\n- SYNC-1: DDS → 消息中间件\\(MVP: ZeroMQ, Phase 2 评估 DDS\\)\n- SYNC-2: FR61/FR62 标注 Phase 2\n- SYNC-3: FR13 措辞修订\\(消息传递通信+故障隔离\\)\n- 6.4 数据持久化对齐架构决策\n- 新增 FR64-FR68: 一次性完成反馈闭环机制\n- 架构补充设计: 经验模板存储与 Toolization Loop 衔接\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
