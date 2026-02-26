@@ -1,0 +1,6 @@
+id: router.intent_classification
+version: 1
+depends_on: []
+output_schema: json
+template_file: intent_classification.txt
+description: "意图分类 prompt"

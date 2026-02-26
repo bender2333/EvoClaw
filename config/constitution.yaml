@@ -1,0 +1,20 @@
+# EvoClaw 宪法约束 — 三不可变支柱
+# Phase 3 完整实现，MVP 仅定义
+
+pillars:
+  - name: "Facade 人格契约"
+    description: "统一人格不可被进化过程修改"
+    immutable: true
+
+  - name: "Governance Kernel"
+    description: "治理核心逻辑不可被进化过程修改"
+    immutable: true
+
+  - name: "Canonical Event Log"
+    description: "事件日志 append-only，不可修改已写入记录"
+    immutable: true
+
+# 宪法变更需用户显式确认 + ≥24h 冷静期（FR50, Phase 3）
+amendment:
+  requires_user_confirmation: true
+  cooling_period_hours: 24

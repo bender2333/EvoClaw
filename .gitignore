@@ -40,15 +40,23 @@
 # debug information files
 *.dwo
 
-# Build artifacts
+# ── EvoClaw 项目特定 ────────────────────────────────────────
+
+# CMake 构建目录
 build/
+cmake-build-*/
+CMakeUserPresets.json
 
-# IDE / editor
-.cache/
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
 
-# BMAD agent files (not project code)
-AGENTS.md
-_bmad/AGENTS.md
-doc_design/AGENTS.md
-doc_design/a2a/AGENTS.md
+# 编译数据库
+compile_commands.json
+
+# 运行时数据
+.evoclaw/

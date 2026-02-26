@@ -1,63 +1,40 @@
 #ifndef EVOCLAW_CONFIG_CONFIG_H_
 #define EVOCLAW_CONFIG_CONFIG_H_
 
-#include <expected>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-namespace evoclaw {
+#include "common/error.h"
 
-struct Error {
-  enum class Code { kOk, kNotFound, kTimeout, kInvalidArg, kInternal, kIoError };
-  Code code;
-  std::string message;
-  std::string context;
-};
+namespace evoclaw::config {
 
-/// 端点配置
-struct EndpointConfig {
-  std::string engine;     // e.g. "ipc:///tmp/evoclaw-engine.sock"
-  std::string compiler;   // e.g. "ipc:///tmp/evoclaw-compiler.sock"
-  std::string dashboard;  // e.g. "ipc:///tmp/evoclaw-dashboard.sock"
-  std::string judge;      // e.g. "ipc:///tmp/evoclaw-judge.sock"
-  std::string pub_sub;    // e.g. "ipc:///tmp/evoclaw-pubsub.sock"
-};
-
-/// LLM 配置
-struct LlmConfig {
-  std::string provider;   // "openai"
-  std::string api_key;
-  std::string base_url;   // "https://api.openai.com/v1"
-  std::string model;      // "gpt-4"
-  int max_retries = 3;
-  int timeout_seconds = 30;
-};
-
-/// 预算配置
-struct BudgetConfig {
-  int64_t max_tokens_per_task = 100000;
-  int64_t max_tokens_per_agent = 50000;
-  int max_tool_calls_per_task = 50;
-  int max_rounds_per_task = 20;
-};
-
-/// 全局配置
-struct AppConfig {
-  std::string process_name;
-  std::string data_dir = "./data";
-  std::string log_level = "INFO";
-  EndpointConfig endpoints;
-  LlmConfig llm;
-  BudgetConfig budget;
-};
-
-/// 配置加载接口
+/// 配置接口 — 所有配置源的抽象基类
 class Config {
  public:
   virtual ~Config() = default;
-  virtual std::expected<AppConfig, Error> Load(const std::string& path) = 0;
+
+  /// 获取字符串值
+  virtual Result<std::string> GetString(std::string_view key) const = 0;
+
+  /// 获取整数值
+  virtual Result<int> GetInt(std::string_view key) const = 0;
+
+  /// 获取布尔值
+  virtual Result<bool> GetBool(std::string_view key) const = 0;
+
+  /// 获取字符串值，缺失时返回默认值
+  virtual std::string GetStringOr(std::string_view key,
+                                  std::string_view default_val) const = 0;
+
+  /// 获取整数值，缺失时返回默认值
+  virtual int GetIntOr(std::string_view key, int default_val) const = 0;
+
+  /// 获取布尔值，缺失时返回默认值
+  virtual bool GetBoolOr(std::string_view key, bool default_val) const = 0;
 };
 
-}  // namespace evoclaw
+}  // namespace evoclaw::config
 
 #endif  // EVOCLAW_CONFIG_CONFIG_H_

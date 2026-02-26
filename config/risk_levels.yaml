@@ -1,0 +1,38 @@
+# 风险等级定义 — Story 4.6
+# L0: 直接执行，无需通知
+# L1: 执行后通知用户
+# L2: 暂停执行，需用户确认
+# L3: 暂停执行，需用户二次确认（间隔 ≥5s）
+
+file_ops:
+  read: L0
+  write: L1
+  delete: L1
+  directory_delete: L2
+
+shell_ops:
+  whitelist:  # L0 命令
+    - ls
+    - cat
+    - pwd
+    - whoami
+    - date
+  default: L2
+
+process_ops:
+  query: L0
+  start: L2
+  stop: L3
+
+network_ops:
+  default: L1
+  authenticated: L2
+
+code_ops:
+  script_execute: L2
+  compile_execute: L3
+
+cron_ops:
+  create: L2
+  modify: L2
+  delete: L2

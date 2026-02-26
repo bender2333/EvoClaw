@@ -1,31 +1,40 @@
 #ifndef EVOCLAW_PROTOCOL_RULE_ENGINE_H_
 #define EVOCLAW_PROTOCOL_RULE_ENGINE_H_
 
-#include "config/config.h"
-#include <expected>
 #include <string>
+#include <vector>
+
 #include <nlohmann/json.hpp>
 
-namespace evoclaw {
+#include "common/error.h"
 
-/// 形式约束验证结果
+namespace evoclaw::protocol {
+
+/// 约束验证结果
 struct ValidationResult {
   bool passed = true;
-  std::string reason;
+  std::vector<std::string> violations;  // 违反的约束描述
 };
 
-/// 形式约束验证接口（Cortex Layer III）
-/// MVP 用规则引擎实现，Phase 2 可替换为 Z3
+/// RuleEngine 纯虚基类 — 形式约束验证接口
+///
+/// MVP 实现 BasicRuleEngine（数值/范围/布尔验证），
+/// Phase 2 可替换为 Z3 求解器实现。
+///
+/// 架构文档：约束验证 ≤100ms（NFR3）
 class RuleEngine {
  public:
   virtual ~RuleEngine() = default;
 
-  /// 验证 payload 是否满足形式约束
-  virtual std::expected<ValidationResult, Error> Validate(
+  /// 验证 payload 是否满足指定约束规则
+  /// @param payload  待验证的 JSON 数据
+  /// @param rules    约束规则定义（JSON 格式）
+  /// @return 验证结果，包含是否通过和违反列表
+  virtual Result<ValidationResult> Validate(
       const nlohmann::json& payload,
-      const nlohmann::json& constraints) = 0;
+      const nlohmann::json& rules) const = 0;
 };
 
-}  // namespace evoclaw
+}  // namespace evoclaw::protocol
 
 #endif  // EVOCLAW_PROTOCOL_RULE_ENGINE_H_

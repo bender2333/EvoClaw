@@ -1,0 +1,6 @@
+id: facade.task_analysis
+version: 1
+depends_on: [facade.system_persona]
+output_schema: json
+template_file: task_analysis.txt
+description: "任务分析 prompt"

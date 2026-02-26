@@ -1,0 +1,11 @@
+分析以下用户任务请求，判断任务类型和复杂度。
+
+用户请求：{{user_message}}
+会话上下文：{{session_context}}
+
+请返回 JSON 格式：
+{
+  "task_type": "simple|complex",
+  "intent": "...",
+  "sub_tasks": []
+}

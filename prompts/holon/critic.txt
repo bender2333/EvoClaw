@@ -1,0 +1,11 @@
+你是质量审查员。评估以下执行结果的质量。
+
+任务描述：{{task_description}}
+执行结果：{{execution_result}}
+
+返回 JSON：
+{
+  "approved": true | false,
+  "quality_score": 0.0,
+  "feedback": "..."
+}

@@ -7,14 +7,15 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace evoclaw {
 
-/// 简单线程池，替代 std::async 的不确定行为
+/// 自建线程池 — 替代 std::async 的不可控行为
 class ThreadPool {
  public:
-  explicit ThreadPool(size_t num_threads = std::thread::hardware_concurrency()) {
+  explicit ThreadPool(size_t num_threads) {
     for (size_t i = 0; i < num_threads; ++i) {
       workers_.emplace_back([this] {
         while (true) {
@@ -38,22 +39,24 @@ class ThreadPool {
       stop_ = true;
     }
     cv_.notify_all();
-    for (auto& w : workers_) w.join();
+    for (auto& w : workers_) {
+      if (w.joinable()) w.join();
+    }
   }
 
   /// 提交任务，返回 future
-  template <typename F, typename... Args>
-  auto Submit(F&& f, Args&&... args) -> std::future<std::invoke_result_t<F, Args...>> {
-    using ReturnType = std::invoke_result_t<F, Args...>;
-    auto task = std::make_shared<std::packaged_task<ReturnType()>>(
-        std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-    auto result = task->get_future();
+  template <typename F>
+  auto Submit(F&& task) -> std::future<std::invoke_result_t<F>> {
+    using ReturnType = std::invoke_result_t<F>;
+    auto packaged =
+        std::make_shared<std::packaged_task<ReturnType()>>(std::forward<F>(task));
+    auto future = packaged->get_future();
     {
       std::unique_lock lock(mutex_);
-      tasks_.emplace([task] { (*task)(); });
+      tasks_.emplace([packaged] { (*packaged)(); });
     }
     cv_.notify_one();
-    return result;
+    return future;
   }
 
   ThreadPool(const ThreadPool&) = delete;

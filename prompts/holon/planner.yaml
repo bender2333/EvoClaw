@@ -1,0 +1,6 @@
+id: holon.planner
+version: 1
+depends_on: []
+output_schema: json
+template_file: planner.txt
+description: "Holon 规划者 prompt"

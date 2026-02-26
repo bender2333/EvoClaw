@@ -1,0 +1,7 @@
+将以下 Pattern 编译为确定性执行脚本。
+
+Pattern：{{pattern}}
+
+要求：
+- 编译产物延迟和 token 消耗低于原协作路径
+- 包含接口定义、执行逻辑、参数 schema

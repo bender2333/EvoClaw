@@ -1,0 +1,6 @@
+id: facade.system_persona
+version: 1
+depends_on: []
+output_schema: text
+template_file: system_persona.txt
+description: "管家统一人格 prompt"

@@ -1,86 +1,56 @@
-# ── 测试 ──
 include(GoogleTest)
 
-# 辅助函数：添加测试
-function(evoclaw_add_test TEST_NAME TEST_SOURCE)
-  add_executable(${TEST_NAME} ${TEST_SOURCE})
-  target_link_libraries(${TEST_NAME} PRIVATE evoclaw GTest::gtest_main GTest::gmock)
-  target_include_directories(${TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/lib)
-  gtest_discover_tests(${TEST_NAME})
-endfunction()
+# ── lib/ 单元测试 ───────────────────────────────────────────
 
-# lib/ 单元测试
-evoclaw_add_test(test_serializer lib/protocol/serializer_test.cpp)
-evoclaw_add_test(test_basic_rule_engine lib/protocol/basic_rule_engine_test.cpp)
-evoclaw_add_test(test_cerebellum lib/protocol/cerebellum_test.cpp)
-evoclaw_add_test(test_jsonl_event_store lib/event_log/jsonl_event_store_test.cpp)
-evoclaw_add_test(test_event_merger lib/event_log/event_merger_test.cpp)
-evoclaw_add_test(test_fs_memory_store lib/memory/fs_memory_store_test.cpp)
-evoclaw_add_test(test_yaml_config lib/config/yaml_config_test.cpp)
-evoclaw_add_test(test_prompt_registry lib/llm/prompt_registry_test.cpp)
+# common — 空测试（验证构建系统）
+add_executable(common_test lib/common/common_test.cpp)
+target_link_libraries(common_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(common_test)
 
-# 集成测试
-evoclaw_add_test(test_bus_integration integration/bus_integration_test.cpp)
+# config
+add_executable(yaml_config_test lib/config/yaml_config_test.cpp)
+target_link_libraries(yaml_config_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(yaml_config_test)
 
-# src/engine/ 组件测试（需要 engine 源码目录的 include path）
-function(evoclaw_add_engine_test TEST_NAME TEST_SOURCE)
-  add_executable(${TEST_NAME} ${TEST_SOURCE})
-  target_link_libraries(${TEST_NAME} PRIVATE evoclaw GTest::gtest_main GTest::gmock)
-  target_include_directories(${TEST_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/lib
-    ${CMAKE_SOURCE_DIR}/src/engine
-  )
-  gtest_discover_tests(${TEST_NAME})
-endfunction()
+# protocol
+add_executable(serializer_test lib/protocol/serializer_test.cpp)
+target_link_libraries(serializer_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(serializer_test)
 
-# Router 测试需要链接 router 源文件
-add_executable(test_router
-  src/engine/router_test.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/router/router.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/router/capability_matrix.cpp
-)
-target_link_libraries(test_router PRIVATE evoclaw GTest::gtest_main GTest::gmock)
-target_include_directories(test_router PRIVATE
-  ${CMAKE_SOURCE_DIR}/lib
-  ${CMAKE_SOURCE_DIR}/src/engine
-)
-gtest_discover_tests(test_router)
+add_executable(basic_rule_engine_test lib/protocol/basic_rule_engine_test.cpp)
+target_link_libraries(basic_rule_engine_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(basic_rule_engine_test)
 
-# Governance 测试
-add_executable(test_governance
-  src/engine/governance_test.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/governance/governance_gate.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/governance/constitution.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/governance/entropy_monitor.cpp
-)
-target_link_libraries(test_governance PRIVATE evoclaw GTest::gtest_main GTest::gmock)
-target_include_directories(test_governance PRIVATE
-  ${CMAKE_SOURCE_DIR}/lib
-  ${CMAKE_SOURCE_DIR}/src/engine
-)
-gtest_discover_tests(test_governance)
+# bus
+add_executable(zmq_message_bus_test lib/bus/zmq_message_bus_test.cpp)
+target_link_libraries(zmq_message_bus_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(zmq_message_bus_test)
 
-# Safety 测试
-add_executable(test_safety
-  src/engine/safety_test.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/safety/risk_classifier.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/safety/permission_manager.cpp
-)
-target_link_libraries(test_safety PRIVATE evoclaw GTest::gtest_main GTest::gmock)
-target_include_directories(test_safety PRIVATE
-  ${CMAKE_SOURCE_DIR}/lib
-  ${CMAKE_SOURCE_DIR}/src/engine
-)
-gtest_discover_tests(test_safety)
+# event_log
+add_executable(jsonl_event_store_test lib/event_log/jsonl_event_store_test.cpp)
+target_link_libraries(jsonl_event_store_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(jsonl_event_store_test)
 
-# Facade 测试
-add_executable(test_facade
-  src/engine/facade_test.cpp
-  ${CMAKE_SOURCE_DIR}/src/engine/facade/facade.cpp
-)
-target_link_libraries(test_facade PRIVATE evoclaw GTest::gtest_main GTest::gmock)
-target_include_directories(test_facade PRIVATE
-  ${CMAKE_SOURCE_DIR}/lib
-  ${CMAKE_SOURCE_DIR}/src/engine
-)
-gtest_discover_tests(test_facade)
+add_executable(event_merger_test lib/event_log/event_merger_test.cpp)
+target_link_libraries(event_merger_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(event_merger_test)
+
+# memory
+add_executable(fs_memory_store_test lib/memory/fs_memory_store_test.cpp)
+target_link_libraries(fs_memory_store_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(fs_memory_store_test)
+
+# llm
+add_executable(openai_client_test lib/llm/openai_client_test.cpp)
+target_link_libraries(openai_client_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(openai_client_test)
+
+add_executable(prompt_registry_test lib/llm/prompt_registry_test.cpp)
+target_link_libraries(prompt_registry_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(prompt_registry_test)
+
+# ── 集成测试 ────────────────────────────────────────────────
+
+add_executable(bus_integration_test integration/bus_integration_test.cpp)
+target_link_libraries(bus_integration_test PRIVATE evoclaw GTest::gtest_main)
+gtest_discover_tests(bus_integration_test)

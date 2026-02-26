@@ -1,89 +1,100 @@
 #include "protocol/serializer.h"
-#include "common/uuid.h"
-#include "common/sha256.h"
+
+#include <random>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
 
-namespace evoclaw {
+namespace evoclaw::protocol {
 
-namespace {
+// ── Message 静态方法 ──────────────────────────────────────
 
-std::string ComputeSha256(const std::string& data) {
-  return "sha256:" + Sha256::Hash(data);
+std::string Message::Now() {
+  auto now = std::chrono::system_clock::now();
+  auto time_t = std::chrono::system_clock::to_time_t(now);
+  std::tm tm{};
+#ifdef _WIN32
+  gmtime_s(&tm, &time_t);
+#else
+  gmtime_r(&time_t, &tm);
+#endif
+  std::ostringstream oss;
+  oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+  return oss.str();
 }
 
-}  // namespace
+std::string Message::NewId() {
+  static thread_local std::mt19937 gen(std::random_device{}());
+  std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF);
 
-std::string Serializer::Serialize(const Message& msg) {
-  nlohmann::json j;
-  j["msg_id"] = msg.msg_id;
-  j["msg_type"] = msg.msg_type;
-  j["source"] = msg.source;
-  j["target"] = msg.target;
-  j["timestamp"] = msg.timestamp;
-  j["payload"] = msg.payload;
-  return j.dump();
+  auto hex = [&](int bytes) {
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (int i = 0; i < bytes; ++i) {
+      oss << std::setw(2) << (dist(gen) & 0xFF);
+    }
+    return oss.str();
+  };
+
+  // UUID v4 格式：8-4-4-4-12
+  return hex(4) + "-" + hex(2) + "-4" + hex(1).substr(0, 3) + "-" +
+         hex(2) + "-" + hex(6);
 }
 
-std::expected<Message, Error> Serializer::Deserialize(const std::string& json_str) {
+// ── Serializer ────────────────────────────────────────────
+
+nlohmann::json Serializer::ToJson(const Message& msg) {
+  return {
+      {"msg_id", msg.msg_id},
+      {"msg_type", msg.msg_type},
+      {"source", msg.source},
+      {"target", msg.target},
+      {"timestamp", msg.timestamp},
+      {"qos", static_cast<int>(msg.qos)},
+      {"payload", msg.payload},
+  };
+}
+
+Result<std::string> Serializer::Serialize(const Message& msg) {
   try {
-    auto j = nlohmann::json::parse(json_str);
+    return ToJson(msg).dump();
+  } catch (const nlohmann::json::exception& e) {
+    return std::unexpected(
+        Error::Make(ErrorCode::kSerializationError,
+                    std::string("JSON serialize failed: ") + e.what(),
+                    "Serializer::Serialize"));
+  }
+}
+
+Result<Message> Serializer::FromJson(const nlohmann::json& j) {
+  try {
     Message msg;
     msg.msg_id = j.at("msg_id").get<std::string>();
     msg.msg_type = j.at("msg_type").get<std::string>();
     msg.source = j.at("source").get<std::string>();
     msg.target = j.value("target", "");
     msg.timestamp = j.at("timestamp").get<std::string>();
+    msg.qos = static_cast<QoS>(j.value("qos", 0));
     msg.payload = j.value("payload", nlohmann::json::object());
     return msg;
   } catch (const nlohmann::json::exception& e) {
-    return std::unexpected(Error{Error::Code::kInvalidArg, e.what(), "Serializer::Deserialize"});
+    return std::unexpected(
+        Error::Make(ErrorCode::kSerializationError,
+                    std::string("JSON deserialize failed: ") + e.what(),
+                    "Serializer::FromJson"));
   }
 }
 
-std::string Serializer::SerializeEvent(const Event& event) {
-  nlohmann::json j;
-  j["event_id"] = event.event_id;
-  j["event_type"] = event.event_type;
-  j["source_process"] = event.source_process;
-  j["timestamp"] = event.timestamp;
-  j["data"] = event.data;
-
-  // checksum 基于除 checksum 外的所有字段
-  std::string content = j.dump();
-  j["checksum"] = ComputeSha256(content);
-  return j.dump();
-}
-
-std::expected<Event, Error> Serializer::DeserializeEvent(const std::string& json_str) {
+Result<Message> Serializer::Deserialize(std::string_view json_str) {
   try {
     auto j = nlohmann::json::parse(json_str);
-    Event event;
-    event.event_id = j.at("event_id").get<std::string>();
-    event.event_type = j.at("event_type").get<std::string>();
-    event.source_process = j.at("source_process").get<std::string>();
-    event.timestamp = j.at("timestamp").get<std::string>();
-    event.data = j.value("data", nlohmann::json::object());
-    event.checksum = j.value("checksum", "");
-
-    // 校验 checksum
-    if (!event.checksum.empty()) {
-      nlohmann::json verify_j;
-      verify_j["event_id"] = event.event_id;
-      verify_j["event_type"] = event.event_type;
-      verify_j["source_process"] = event.source_process;
-      verify_j["timestamp"] = event.timestamp;
-      verify_j["data"] = event.data;
-      std::string expected_checksum = ComputeSha256(verify_j.dump());
-      if (event.checksum != expected_checksum) {
-        return std::unexpected(Error{Error::Code::kInvalidArg, "Checksum mismatch", "Serializer::DeserializeEvent"});
-      }
-    }
-
-    return event;
+    return FromJson(j);
   } catch (const nlohmann::json::exception& e) {
-    return std::unexpected(Error{Error::Code::kInvalidArg, e.what(), "Serializer::DeserializeEvent"});
+    return std::unexpected(
+        Error::Make(ErrorCode::kSerializationError,
+                    std::string("JSON parse failed: ") + e.what(),
+                    "Serializer::Deserialize"));
   }
 }
 
-}  // namespace evoclaw
+}  // namespace evoclaw::protocol

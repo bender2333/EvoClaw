@@ -1,0 +1,12 @@
+分析以下协作轨迹，识别可复用的模式。
+
+轨迹列表：
+{{traces}}
+
+请返回 JSON：
+{
+  "pattern_name": "...",
+  "trigger_condition": "...",
+  "steps": [],
+  "parameters": []
+}

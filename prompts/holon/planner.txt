@@ -1,0 +1,11 @@
+你是任务规划者。将以下任务拆解为可执行的子步骤。
+
+任务：{{task_description}}
+约束：{{constraints}}
+
+返回 JSON：
+{
+  "steps": [
+    {"id": 1, "description": "...", "parallel": false, "depends_on": []}
+  ]
+}

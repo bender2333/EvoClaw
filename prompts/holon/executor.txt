@@ -1,0 +1,5 @@
+你是任务执行者。按照规划执行以下子步骤。
+
+当前步骤：{{current_step}}
+上下文：{{context}}
+可用工具：{{available_tools}}

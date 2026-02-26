@@ -1,29 +1,34 @@
 #ifndef EVOCLAW_PROTOCOL_SERIALIZER_H_
 #define EVOCLAW_PROTOCOL_SERIALIZER_H_
 
-#include "protocol/message.h"
-#include "config/config.h"
-#include <expected>
 #include <string>
 
-namespace evoclaw {
+#include <nlohmann/json.hpp>
 
-/// JSON 序列化/反序列化
+#include "common/error.h"
+#include "protocol/message.h"
+
+namespace evoclaw::protocol {
+
+/// JSON 序列化器 — Message ↔ JSON ↔ string
+///
+/// 所有 ZeroMQ 消息经过此类序列化/反序列化。
+/// JSON 字段一律 snake_case。
 class Serializer {
  public:
-  /// Message → JSON 字符串
-  static std::string Serialize(const Message& msg);
+  /// Message → JSON string
+  static Result<std::string> Serialize(const Message& msg);
 
-  /// JSON 字符串 → Message
-  static std::expected<Message, Error> Deserialize(const std::string& json_str);
+  /// JSON string → Message
+  static Result<Message> Deserialize(std::string_view json_str);
 
-  /// Event → JSON 字符串（含 checksum 计算）
-  static std::string SerializeEvent(const Event& event);
+  /// Message → nlohmann::json
+  static nlohmann::json ToJson(const Message& msg);
 
-  /// JSON 字符串 → Event（含 checksum 校验）
-  static std::expected<Event, Error> DeserializeEvent(const std::string& json_str);
+  /// nlohmann::json → Message
+  static Result<Message> FromJson(const nlohmann::json& j);
 };
 
-}  // namespace evoclaw
+}  // namespace evoclaw::protocol
 
 #endif  // EVOCLAW_PROTOCOL_SERIALIZER_H_

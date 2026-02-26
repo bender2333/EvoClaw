@@ -1,26 +1,39 @@
 # EvoClaw 配置文件示例
-process_name: evoclaw
+# 复制为 ~/.evoclaw/config/evoclaw.yaml 使用
+# 环境变量可覆盖任意配置项：EVOCLAW_ + 大写KEY + 下划线替换点号
+#   例：bus.engine_pub → EVOCLAW_BUS_ENGINE_PUB
 
-data_dir: ./data
-log_level: INFO
+# ── 进程间通信端点 ──────────────────────────────────────────
+bus:
+  engine_pub: "ipc:///tmp/evoclaw-engine-pub.sock"
+  engine_router: "ipc:///tmp/evoclaw-engine-router.sock"
+  compiler_dealer: "ipc:///tmp/evoclaw-compiler-dealer.sock"
+  dashboard_sub: "ipc:///tmp/evoclaw-dashboard-sub.sock"
 
-endpoints:
-  engine: "ipc:///tmp/evoclaw-engine.sock"
-  compiler: "ipc:///tmp/evoclaw-compiler.sock"
-  dashboard: "ipc:///tmp/evoclaw-dashboard.sock"
-  judge: "ipc:///tmp/evoclaw-judge.sock"
-  pub_sub: "ipc:///tmp/evoclaw-pubsub.sock"
+# ── 日志 ────────────────────────────────────────────────────
+log:
+  level: "info"
+  directory: "~/.evoclaw/logs"
 
+# ── 数据目录 ────────────────────────────────────────────────
+data:
+  root: "~/.evoclaw/data"
+  events_dir: "events"
+  memory_dir: "memory"
+
+# ── LLM ─────────────────────────────────────────────────────
 llm:
-  provider: openai
-  api_key: "${OPENAI_API_KEY}"
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4"
+  provider: "openai"
+  model: "gpt-4o"
   max_retries: 3
   timeout_seconds: 30
 
-budget:
-  max_tokens_per_task: 100000
-  max_tokens_per_agent: 50000
-  max_tool_calls_per_task: 50
-  max_rounds_per_task: 20
+# ── Discord Bot ─────────────────────────────────────────────
+discord:
+  enabled: true
+
+# ── 进化参数 ────────────────────────────────────────────────
+evolution:
+  pattern_threshold: 3
+  cooldown_hours: 24
+  sandbox_enabled: true
