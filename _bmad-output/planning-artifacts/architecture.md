@@ -892,6 +892,30 @@ raw message → Cerebellum::Pack()     # 压缩 context（S/M/L 密度）
 - Validate() 对 L2 消息调用 RuleEngine，L0/L1 跳过
 - 异步模式：L0/L1 消息不阻塞，L2 验证失败后追溯处理
 
+### 补充设计：一次性完成反馈闭环（FR64-FR68）
+
+Toolization Loop 之前的质量反馈机制——目标是让系统"学会一次做好"：
+
+```
+任务完成 → 征询用户反馈(FR64)
+              ├─ 满意 → 正常记录到 Event Log
+              └─ 不满意 → 记录失败上下文(FR65)
+                           → 基于失败历史重试(FR66)
+                           → 重试成功 → 固化经验模板(FR67)
+                           → 同类任务加载经验模板(FR68)
+```
+
+**实现位置：**
+- 反馈征询：`src/engine/facade` — 任务完成后通过 Discord Bot 发送反馈请求（thumbs up/down + 可选文字说明）
+- 失败上下文记录：`lib/event_log/` — 新增事件类型 `task.feedback.negative`，payload 包含 task_id、执行路径摘要、用户不满点
+- 经验模板存储：`lib/memory/` — 新增 `experience_templates/` 目录，per-task-category 的 YAML 文件，记录 `{failure_pattern, correction_strategy, success_path}`
+- 经验加载：`src/engine/router` — 路由任务前查询匹配的经验模板，注入为 Holon 执行约束
+
+**与 Toolization Loop 的关系：**
+- 经验模板是"软经验"（指导 Holons 怎么做），插件是"硬固化"（替代 Holons）
+- 当同一经验模板被成功应用 ≥3 次，Compiler 可将其升级为编译候选
+- 进化路径：失败→经验模板→反复验证→编译为插件
+
 ### Validation Checklist
 
 | # | 检查项 | 状态 |
@@ -902,7 +926,7 @@ raw message → Cerebellum::Pack()     # 压缩 context（S/M/L 密度）
 | V4 | 错误类型转换关系 | ✅ PASS（C5 已修复） |
 | V5 | PRD↔架构一致性 | ⚠️ 已标注回溯（PRD-SYNC-1/2） |
 | V6 | 进程模型确定性 | ✅ PASS（C3 已合并） |
-| V7 | FR 覆盖率（63 FR） | ✅ PASS（58 直接覆盖 + 5 补充设计） |
+| V7 | FR 覆盖率（68 FR） | ✅ PASS（63 直接覆盖 + 5 补充设计） |
 | V8 | NFR 覆盖率（24 NFR） | ✅ PASS（20 直接覆盖 + 4 可接受） |
 | V9 | 热替换协议（FR14） | ✅ PASS（R1 已补充） |
 | V10 | 主动服务触发（FR8） | ✅ PASS（R2 已补充） |
