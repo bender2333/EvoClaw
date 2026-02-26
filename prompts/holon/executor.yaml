@@ -1,0 +1,6 @@
+id: holon.executor
+version: 1
+depends_on: [holon.planner]
+output_schema: text
+template_file: executor.txt
+description: "Holon 执行者 prompt"

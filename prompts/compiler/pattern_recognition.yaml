@@ -1,0 +1,6 @@
+id: compiler.pattern_recognition
+version: 1
+depends_on: [holon.executor]
+output_schema: json
+template_file: pattern_recognition.txt
+description: "模式识别 prompt"

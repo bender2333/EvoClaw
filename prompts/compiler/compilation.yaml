@@ -1,0 +1,6 @@
+id: compiler.compilation
+version: 1
+depends_on: [compiler.pattern_recognition]
+output_schema: json
+template_file: compilation.txt
+description: "Pattern 编译 prompt"

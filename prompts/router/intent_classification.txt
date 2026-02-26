@@ -1,0 +1,11 @@
+对以下任务进行意图分类，匹配已注册的插件能力。
+
+任务描述：{{task_description}}
+已注册插件：{{registered_plugins}}
+
+返回 JSON：
+{
+  "matched_plugin": null | "plugin_id",
+  "confidence": 0.0,
+  "route_to_holons": true | false
+}

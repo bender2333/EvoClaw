@@ -1,0 +1,6 @@
+id: holon.critic
+version: 1
+depends_on: [holon.executor]
+output_schema: json
+template_file: critic.txt
+description: "Holon 审查员 prompt"

@@ -39,3 +39,24 @@
 
 # debug information files
 *.dwo
+
+# ── EvoClaw 项目特定 ────────────────────────────────────────
+
+# CMake 构建目录
+build/
+cmake-build-*/
+CMakeUserPresets.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+
+# 编译数据库
+compile_commands.json
+
+# 运行时数据
+.evoclaw/
