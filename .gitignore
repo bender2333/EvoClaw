@@ -39,3 +39,16 @@
 
 # debug information files
 *.dwo
+
+# Build artifacts
+build/
+
+# IDE / editor
+.cache/
+.vscode/
+
+# BMAD agent files (not project code)
+AGENTS.md
+_bmad/AGENTS.md
+doc_design/AGENTS.md
+doc_design/a2a/AGENTS.md

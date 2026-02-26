@@ -1,0 +1,26 @@
+# EvoClaw 配置文件示例
+process_name: evoclaw
+
+data_dir: ./data
+log_level: INFO
+
+endpoints:
+  engine: "ipc:///tmp/evoclaw-engine.sock"
+  compiler: "ipc:///tmp/evoclaw-compiler.sock"
+  dashboard: "ipc:///tmp/evoclaw-dashboard.sock"
+  judge: "ipc:///tmp/evoclaw-judge.sock"
+  pub_sub: "ipc:///tmp/evoclaw-pubsub.sock"
+
+llm:
+  provider: openai
+  api_key: "${OPENAI_API_KEY}"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4"
+  max_retries: 3
+  timeout_seconds: 30
+
+budget:
+  max_tokens_per_task: 100000
+  max_tokens_per_agent: 50000
+  max_tool_calls_per_task: 50
+  max_rounds_per_task: 20
