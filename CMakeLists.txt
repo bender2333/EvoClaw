@@ -15,6 +15,7 @@ endif()
 
 # 依赖
 find_package(Threads REQUIRED)
+find_package(OpenSSL QUIET)
 
 # 第三方库（单头文件，直接包含）
 include_directories(third_party)
@@ -45,6 +46,13 @@ set(EVOLCLAW_SOURCES
 add_library(evoclaw_core ${EVOLCLAW_SOURCES})
 target_include_directories(evoclaw_core PUBLIC src)
 target_link_libraries(evoclaw_core PUBLIC Threads::Threads)
+
+if(OpenSSL_FOUND)
+    target_compile_definitions(evoclaw_core PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(evoclaw_core PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+else()
+    message(WARNING "OpenSSL not found: HTTPS LLM endpoints will be unavailable")
+endif()
 
 # 测试
 enable_testing()

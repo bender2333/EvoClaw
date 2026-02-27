@@ -1,5 +1,5 @@
-#include "llm/llm_client.hpp"
 #include "core/types.hpp"
+#include "llm/llm_client.hpp"
 
 #include <gtest/gtest.h>
 
@@ -53,8 +53,11 @@ TEST(LLMTest, ChatMessageConstruction) {
 TEST(LLMTest, CreateFromEnvFallsBackToMockWhenNoApiKey) {
     ScopedEnvVar api_key_guard("EVOCLAW_API_KEY");
     ScopedEnvVar home_guard("HOME");
+    ScopedEnvVar provider_guard("EVOCLAW_PROVIDER");
 
     unsetenv("EVOCLAW_API_KEY");
+    unsetenv("EVOCLAW_PROVIDER");
+
     const auto temp_home = std::filesystem::temp_directory_path() / ("evoclaw_llm_" + evoclaw::generate_uuid());
     std::filesystem::create_directories(temp_home);
     setenv("HOME", temp_home.string().c_str(), 1);
@@ -79,11 +82,14 @@ TEST(LLMTest, MockFallbackResponseWhenApiKeyMissing) {
     EXPECT_NE(response.content.find("Mock"), std::string::npos);
 }
 
-TEST(LLMTest, CreateFromEnvReadsOpenClawConfigFile) {
+TEST(LLMTest, CreateFromEnvPrefersBailianProvider) {
     ScopedEnvVar api_key_guard("EVOCLAW_API_KEY");
     ScopedEnvVar home_guard("HOME");
+    ScopedEnvVar provider_guard("EVOCLAW_PROVIDER");
 
     unsetenv("EVOCLAW_API_KEY");
+    unsetenv("EVOCLAW_PROVIDER");
+
     const auto temp_home = std::filesystem::temp_directory_path() / ("evoclaw_llm_cfg_" + evoclaw::generate_uuid());
     const auto config_dir = temp_home / ".openclaw";
     std::filesystem::create_directories(config_dir);
@@ -93,7 +99,14 @@ TEST(LLMTest, CreateFromEnvReadsOpenClawConfigFile) {
   "models": {
     "providers": {
       "mynewapi": {
-        "apiKey": "from-config-file"
+        "apiKey": "legacy-key",
+        "baseUrl": "http://legacy.local/v1",
+        "models": [{ "id": "legacy-model" }]
+      },
+      "bailian": {
+        "apiKey": "bailian-key",
+        "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
+        "models": [{ "id": "kimi-k2.5" }]
       }
     }
   }
@@ -102,11 +115,80 @@ TEST(LLMTest, CreateFromEnvReadsOpenClawConfigFile) {
 
     setenv("HOME", temp_home.string().c_str(), 1);
     const auto client = evoclaw::llm::create_from_env();
+    const auto status = client.status_json();
+
     EXPECT_FALSE(client.is_mock_mode());
     EXPECT_TRUE(client.has_api_key());
+    EXPECT_EQ(status.value("base_url", std::string()), "https://coding.dashscope.aliyuncs.com/v1");
+    EXPECT_EQ(status.value("model", std::string()), "kimi-k2.5");
 
     std::error_code ec;
     std::filesystem::remove_all(temp_home, ec);
+}
+
+TEST(LLMTest, EnvOverridesProviderConfig) {
+    ScopedEnvVar api_key_guard("EVOCLAW_API_KEY");
+    ScopedEnvVar base_guard("EVOCLAW_BASE_URL");
+    ScopedEnvVar model_guard("EVOCLAW_MODEL");
+    ScopedEnvVar home_guard("HOME");
+
+    const auto temp_home = std::filesystem::temp_directory_path() / ("evoclaw_llm_override_" + evoclaw::generate_uuid());
+    const auto config_dir = temp_home / ".openclaw";
+    std::filesystem::create_directories(config_dir);
+
+    std::ofstream out(config_dir / "openclaw.json");
+    out << R"({
+  "models": {
+    "providers": {
+      "bailian": {
+        "apiKey": "config-key",
+        "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
+        "models": [{ "id": "kimi-k2.5" }]
+      }
+    }
+  }
+})";
+    out.close();
+
+    setenv("HOME", temp_home.string().c_str(), 1);
+    setenv("EVOCLAW_API_KEY", "env-key", 1);
+    setenv("EVOCLAW_BASE_URL", "http://localhost:1234/v1", 1);
+    setenv("EVOCLAW_MODEL", "env-model", 1);
+
+    const auto client = evoclaw::llm::create_from_env();
+    const auto status = client.status_json();
+
+    EXPECT_FALSE(client.is_mock_mode());
+    EXPECT_TRUE(client.has_api_key());
+    EXPECT_EQ(status.value("base_url", std::string()), "http://localhost:1234/v1");
+    EXPECT_EQ(status.value("model", std::string()), "env-model");
+
+    std::error_code ec;
+    std::filesystem::remove_all(temp_home, ec);
+}
+
+TEST(LLMTest, LiveBailianRequestWhenEnabled) {
+    ScopedEnvVar live_guard("EVOCLAW_LIVE_TEST");
+    ScopedEnvVar provider_guard("EVOCLAW_PROVIDER");
+
+    const char* live_flag = std::getenv("EVOCLAW_LIVE_TEST");
+    if (live_flag == nullptr || std::string(live_flag) != "1") {
+        GTEST_SKIP() << "Set EVOCLAW_LIVE_TEST=1 to run live Bailian call.";
+    }
+
+    setenv("EVOCLAW_PROVIDER", "bailian", 1);
+
+    const auto client = evoclaw::llm::create_from_env();
+    if (client.is_mock_mode()) {
+        GTEST_SKIP() << "No usable API key/config for live test.";
+    }
+
+    const auto response = client.ask(
+        "You are a strict tester.",
+        "Reply with exactly: LIVE_OK");
+
+    ASSERT_TRUE(response.success) << response.error;
+    EXPECT_NE(response.content.find("LIVE_OK"), std::string::npos);
 }
 
 } // namespace

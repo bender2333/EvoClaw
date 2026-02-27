@@ -3,12 +3,17 @@
 #include "httplib.h"
 
 #include <cstdlib>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
+#include <vector>
+
+#include <unistd.h>
 
 namespace evoclaw::llm {
 namespace {
@@ -19,18 +24,29 @@ struct UrlParts {
     std::string host;
     int port = 80;
     std::string path_prefix;
+    bool use_tls = false;
 };
 
-std::optional<UrlParts> parse_http_base_url(const std::string& base_url, std::string* error) {
+std::optional<UrlParts> parse_base_url(const std::string& base_url, std::string* error) {
     static constexpr const char* kHttpPrefix = "http://";
-    if (!base_url.starts_with(kHttpPrefix)) {
+    static constexpr const char* kHttpsPrefix = "https://";
+
+    bool use_tls = false;
+    std::string prefix;
+    if (base_url.starts_with(kHttpPrefix)) {
+        prefix = kHttpPrefix;
+        use_tls = false;
+    } else if (base_url.starts_with(kHttpsPrefix)) {
+        prefix = kHttpsPrefix;
+        use_tls = true;
+    } else {
         if (error) {
-            *error = "base_url must start with http://";
+            *error = "base_url must start with http:// or https://";
         }
         return std::nullopt;
     }
 
-    const std::string remainder = base_url.substr(std::char_traits<char>::length(kHttpPrefix));
+    const std::string remainder = base_url.substr(prefix.size());
     const std::size_t slash_pos = remainder.find('/');
     const std::string host_port = remainder.substr(0, slash_pos);
     std::string path_prefix = slash_pos == std::string::npos ? "" : remainder.substr(slash_pos);
@@ -43,6 +59,7 @@ std::optional<UrlParts> parse_http_base_url(const std::string& base_url, std::st
     }
 
     UrlParts parts;
+    parts.use_tls = use_tls;
     std::size_t colon_pos = host_port.rfind(':');
     if (colon_pos != std::string::npos && colon_pos + 1U < host_port.size()) {
         parts.host = host_port.substr(0, colon_pos);
@@ -64,6 +81,7 @@ std::optional<UrlParts> parse_http_base_url(const std::string& base_url, std::st
         }
     } else {
         parts.host = host_port;
+        parts.port = use_tls ? 443 : 80;
     }
 
     if (parts.host.empty()) {
@@ -123,7 +141,7 @@ std::string extract_content_text(const json& content) {
     return {};
 }
 
-std::optional<std::string> api_key_from_openclaw_config() {
+std::optional<json> load_openclaw_config_json() {
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') {
         return std::nullopt;
@@ -145,6 +163,34 @@ std::optional<std::string> api_key_from_openclaw_config() {
     if (!parsed.is_object()) {
         return std::nullopt;
     }
+    return parsed;
+}
+
+std::string get_env_string(const char* name) {
+    if (const char* value = std::getenv(name); value != nullptr && *value != '\0') {
+        return value;
+    }
+    return {};
+}
+
+std::optional<std::string> json_string(const json& object,
+                                       std::initializer_list<const char*> keys) {
+    if (!object.is_object()) {
+        return std::nullopt;
+    }
+    for (const char* key : keys) {
+        if (object.contains(key) && object[key].is_string()) {
+            const std::string value = object[key].get<std::string>();
+            if (!value.empty()) {
+                return value;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<json> select_provider_config(const json& parsed,
+                                           const std::string& preferred_provider) {
     if (!parsed.contains("models") || !parsed["models"].is_object()) {
         return std::nullopt;
     }
@@ -155,112 +201,100 @@ std::optional<std::string> api_key_from_openclaw_config() {
     }
 
     const auto& providers = models["providers"];
-    if (!providers.contains("mynewapi") || !providers["mynewapi"].is_object()) {
-        return std::nullopt;
+    if (!preferred_provider.empty() && providers.contains(preferred_provider) &&
+        providers[preferred_provider].is_object()) {
+        return providers[preferred_provider];
     }
 
-    const auto& mynewapi = providers["mynewapi"];
-    if (!mynewapi.contains("apiKey") || !mynewapi["apiKey"].is_string()) {
-        return std::nullopt;
+    if (providers.contains("bailian") && providers["bailian"].is_object()) {
+        return providers["bailian"];
     }
 
-    const std::string api_key = mynewapi["apiKey"].get<std::string>();
-    if (api_key.empty()) {
-        return std::nullopt;
+    if (providers.contains("mynewapi") && providers["mynewapi"].is_object()) {
+        return providers["mynewapi"];
     }
-    return api_key;
+
+    for (const auto& [name, provider] : providers.items()) {
+        (void)name;
+        if (provider.is_object()) {
+            return provider;
+        }
+    }
+
+    return std::nullopt;
 }
 
-LLMResponse mock_response() {
-    return {
-        .success = true,
-        .content = "Mock LLM response: API key is not configured, running in fallback mode.",
-        .prompt_tokens = 0,
-        .completion_tokens = 0,
-        .error = ""
-    };
+void apply_provider_config(const json& provider, LLMConfig* config) {
+    if (config == nullptr || !provider.is_object()) {
+        return;
+    }
+
+    if (const auto api_key = json_string(provider, {"apiKey", "api_key"}); api_key.has_value()) {
+        config->api_key = *api_key;
+    }
+
+    if (const auto base_url = json_string(provider, {"baseUrl", "baseURL", "base_url"});
+        base_url.has_value()) {
+        config->base_url = *base_url;
+    }
+
+    if (provider.contains("models") && provider["models"].is_array() && !provider["models"].empty()) {
+        const auto& first = provider["models"][0];
+        if (first.is_object()) {
+            if (const auto model_id = json_string(first, {"id", "name"}); model_id.has_value()) {
+                config->model = *model_id;
+            }
+        }
+    }
+
+    if (const auto model = json_string(provider, {"model"}); model.has_value()) {
+        config->model = *model;
+    }
 }
 
-} // namespace
+void apply_openclaw_provider_defaults(LLMConfig* config, const std::string& preferred_provider) {
+    if (config == nullptr) {
+        return;
+    }
 
-LLMClient::LLMClient(LLMConfig config)
-    : config_(std::move(config)) {
-    if (config_.base_url.empty()) {
-        config_.base_url = "http://localhost:3000/v1";
+    const auto config_json = load_openclaw_config_json();
+    if (!config_json.has_value()) {
+        return;
     }
-    if (config_.model.empty()) {
-        config_.model = "claude-opus-4-6";
-    }
-    mock_mode_ = config_.mock_mode || config_.api_key.empty();
 
-    if (mock_mode_) {
-        std::cerr << "[EvoClaw] LLM client running in mock mode (missing API key)." << '\n';
+    const auto provider = select_provider_config(*config_json, preferred_provider);
+    if (!provider.has_value()) {
+        return;
     }
+
+    apply_provider_config(*provider, config);
 }
 
-LLMResponse LLMClient::chat(const std::vector<ChatMessage>& messages) const {
-    if (mock_mode_) {
-        return mock_response();
-    }
-
-    std::string parse_error;
-    const auto parts = parse_http_base_url(config_.base_url, &parse_error);
-    if (!parts.has_value()) {
-        return {
-            .success = false,
-            .content = "",
-            .prompt_tokens = 0,
-            .completion_tokens = 0,
-            .error = "Invalid base URL: " + parse_error
-        };
-    }
-
-    json payload;
-    payload["model"] = config_.model;
-    payload["temperature"] = config_.temperature;
-    payload["max_tokens"] = config_.max_tokens;
-    payload["messages"] = json::array();
-    for (const auto& message : messages) {
-        payload["messages"].push_back({
-            {"role", message.role},
-            {"content", message.content}
-        });
-    }
-
-    httplib::Client client(parts->host, parts->port);
+template <typename ClientT>
+httplib::Result post_json(ClientT& client,
+                          const std::string& endpoint,
+                          const httplib::Headers& headers,
+                          const std::string& body) {
     client.set_connection_timeout(30, 0);
     client.set_read_timeout(30, 0);
     client.set_write_timeout(30, 0);
+    return client.Post(endpoint, headers, body, "application/json");
+}
 
-    httplib::Headers headers{
-        {"Authorization", "Bearer " + config_.api_key}
-    };
-    const std::string endpoint = endpoint_for(parts->path_prefix, "/chat/completions");
-    const auto response = client.Post(endpoint, headers, payload.dump(), "application/json");
-
-    if (!response) {
+LLMResponse parse_chat_payload(const int http_status, const std::string& response_body) {
+    if (http_status < 200 || http_status >= 300) {
         return {
             .success = false,
             .content = "",
             .prompt_tokens = 0,
             .completion_tokens = 0,
-            .error = "HTTP request failed"
-        };
-    }
-
-    if (response->status < 200 || response->status >= 300) {
-        return {
-            .success = false,
-            .content = "",
-            .prompt_tokens = 0,
-            .completion_tokens = 0,
-            .error = "LLM API returned HTTP " + std::to_string(response->status) + ": " + response->body
+            .error = "LLM API returned HTTP " + std::to_string(http_status) + ": " + response_body
         };
     }
 
     json body;
     try {
-        body = json::parse(response->body.empty() ? "{}" : response->body);
+        body = json::parse(response_body.empty() ? "{}" : response_body);
     } catch (const std::exception& ex) {
         return {
             .success = false,
@@ -324,6 +358,250 @@ LLMResponse LLMClient::chat(const std::vector<ChatMessage>& messages) const {
     return result;
 }
 
+LLMResponse parse_chat_response(const httplib::Result& response) {
+    if (!response) {
+        return {
+            .success = false,
+            .content = "",
+            .prompt_tokens = 0,
+            .completion_tokens = 0,
+            .error = "HTTP request failed"
+        };
+    }
+    return parse_chat_payload(response->status, response->body);
+}
+
+std::string shell_escape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('\'');
+    for (char ch : value) {
+        if (ch == '\'') {
+            escaped += "'\\''";
+        } else {
+            escaped.push_back(ch);
+        }
+    }
+    escaped.push_back('\'');
+    return escaped;
+}
+
+std::optional<std::filesystem::path> create_temp_file_path(const char* prefix) {
+    std::string tmpl = std::string("/tmp/") + prefix + "XXXXXX";
+    std::vector<char> buffer(tmpl.begin(), tmpl.end());
+    buffer.push_back('\0');
+
+    const int fd = mkstemp(buffer.data());
+    if (fd < 0) {
+        return std::nullopt;
+    }
+    close(fd);
+    return std::filesystem::path(buffer.data());
+}
+
+std::string read_text_file(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return {};
+    }
+
+    std::ostringstream oss;
+    oss << in.rdbuf();
+    return oss.str();
+}
+
+LLMResponse post_json_via_curl(const std::string& base_url,
+                               const std::string& endpoint,
+                               const std::string& api_key,
+                               const std::string& payload) {
+    const auto request_path = create_temp_file_path("evoclaw_req_");
+    const auto response_path = create_temp_file_path("evoclaw_rsp_");
+    const auto error_path = create_temp_file_path("evoclaw_err_");
+
+    if (!request_path.has_value() || !response_path.has_value() || !error_path.has_value()) {
+        return {
+            .success = false,
+            .content = "",
+            .prompt_tokens = 0,
+            .completion_tokens = 0,
+            .error = "Failed to create temp files for curl request"
+        };
+    }
+
+    {
+        std::ofstream out(*request_path, std::ios::binary);
+        if (!out.is_open()) {
+            std::filesystem::remove(*request_path);
+            std::filesystem::remove(*response_path);
+            std::filesystem::remove(*error_path);
+            return {
+                .success = false,
+                .content = "",
+                .prompt_tokens = 0,
+                .completion_tokens = 0,
+                .error = "Failed to write curl request body"
+            };
+        }
+        out << payload;
+    }
+
+    std::string full_url = base_url;
+    if (!full_url.empty() && full_url.back() == '/' && !endpoint.empty() && endpoint.front() == '/') {
+        full_url.pop_back();
+    }
+    full_url += endpoint;
+
+    const std::string auth_header = "Authorization: Bearer " + api_key;
+
+    const std::string command =
+        "curl -sS -X POST " + shell_escape(full_url) +
+        " -H " + shell_escape(auth_header) +
+        " -H 'Content-Type: application/json'" +
+        " --data-binary @" + shell_escape(request_path->string()) +
+        " -o " + shell_escape(response_path->string()) +
+        " -w '%{http_code}'" +
+        " 2> " + shell_escape(error_path->string());
+
+    std::string status_output;
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe != nullptr) {
+        char buffer[64] = {0};
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            status_output += buffer;
+        }
+    }
+    const int code = pipe == nullptr ? -1 : pclose(pipe);
+
+    const std::string response_body = read_text_file(*response_path);
+    const std::string error_body = read_text_file(*error_path);
+
+    std::filesystem::remove(*request_path);
+    std::filesystem::remove(*response_path);
+    std::filesystem::remove(*error_path);
+
+    if (pipe == nullptr || code != 0) {
+        return {
+            .success = false,
+            .content = "",
+            .prompt_tokens = 0,
+            .completion_tokens = 0,
+            .error = "curl request failed" + (error_body.empty() ? "" : ": " + error_body)
+        };
+    }
+
+    const auto trim_start = status_output.find_first_not_of(" \n\r\t");
+    if (trim_start == std::string::npos) {
+        return {
+            .success = false,
+            .content = "",
+            .prompt_tokens = 0,
+            .completion_tokens = 0,
+            .error = "curl did not return a valid HTTP status"
+        };
+    }
+    const auto trim_end = status_output.find_last_not_of(" \n\r\t");
+    status_output = status_output.substr(trim_start, trim_end - trim_start + 1U);
+
+    int status = 0;
+    try {
+        status = std::stoi(status_output);
+    } catch (...) {
+        return {
+            .success = false,
+            .content = "",
+            .prompt_tokens = 0,
+            .completion_tokens = 0,
+            .error = "curl did not return a valid HTTP status"
+        };
+    }
+
+    return parse_chat_payload(status, response_body);
+}
+
+LLMResponse mock_response() {
+    return {
+        .success = true,
+        .content = "Mock LLM response: API key is not configured, running in fallback mode.",
+        .prompt_tokens = 0,
+        .completion_tokens = 0,
+        .error = ""
+    };
+}
+
+} // namespace
+
+LLMClient::LLMClient(LLMConfig config)
+    : config_(std::move(config)) {
+    if (config_.base_url.empty()) {
+        config_.base_url = "http://localhost:3000/v1";
+    }
+    if (config_.model.empty()) {
+        config_.model = "claude-opus-4-6";
+    }
+    mock_mode_ = config_.mock_mode || config_.api_key.empty();
+
+    if (mock_mode_) {
+        std::cerr << "[EvoClaw] LLM client running in mock mode (missing API key)." << '\n';
+    }
+}
+
+LLMResponse LLMClient::chat(const std::vector<ChatMessage>& messages) const {
+    if (mock_mode_) {
+        return mock_response();
+    }
+
+    std::string parse_error;
+    const auto parts = parse_base_url(config_.base_url, &parse_error);
+    if (!parts.has_value()) {
+        return {
+            .success = false,
+            .content = "",
+            .prompt_tokens = 0,
+            .completion_tokens = 0,
+            .error = "Invalid base URL: " + parse_error
+        };
+    }
+
+    json payload;
+    payload["model"] = config_.model;
+    payload["temperature"] = config_.temperature;
+    payload["max_tokens"] = config_.max_tokens;
+    payload["messages"] = json::array();
+    for (const auto& message : messages) {
+        payload["messages"].push_back({
+            {"role", message.role},
+            {"content", message.content}
+        });
+    }
+
+    httplib::Headers headers{
+        {"Authorization", "Bearer " + config_.api_key}
+    };
+    const std::string endpoint = endpoint_for(parts->path_prefix, "/chat/completions");
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (parts->use_tls) {
+        httplib::SSLClient client(parts->host, parts->port);
+        client.enable_server_certificate_verification(true);
+        const auto response = post_json(client, endpoint, headers, payload.dump());
+        return parse_chat_response(response);
+    }
+#else
+    if (parts->use_tls) {
+        const std::string scheme = "https://";
+        std::string authority = scheme + parts->host;
+        if (parts->port != 443) {
+            authority += ":" + std::to_string(parts->port);
+        }
+        return post_json_via_curl(authority, endpoint, config_.api_key, payload.dump());
+    }
+#endif
+
+    httplib::Client client(parts->host, parts->port);
+    const auto response = post_json(client, endpoint, headers, payload.dump());
+    return parse_chat_response(response);
+}
+
 LLMResponse LLMClient::ask(const std::string& system_prompt, const std::string& user_message) const {
     return chat({
         ChatMessage{"system", system_prompt},
@@ -345,14 +623,19 @@ nlohmann::json LLMClient::status_json() const {
 LLMClient create_from_env() {
     LLMConfig config;
 
-    if (const char* env_key = std::getenv("EVOCLAW_API_KEY"); env_key != nullptr && *env_key != '\0') {
-        config.api_key = env_key;
+    const std::string preferred_provider = get_env_string("EVOCLAW_PROVIDER");
+    apply_openclaw_provider_defaults(&config, preferred_provider);
+
+    if (const std::string env_base_url = get_env_string("EVOCLAW_BASE_URL"); !env_base_url.empty()) {
+        config.base_url = env_base_url;
     }
 
-    if (config.api_key.empty()) {
-        if (const auto file_key = api_key_from_openclaw_config(); file_key.has_value()) {
-            config.api_key = *file_key;
-        }
+    if (const std::string env_model = get_env_string("EVOCLAW_MODEL"); !env_model.empty()) {
+        config.model = env_model;
+    }
+
+    if (const std::string env_key = get_env_string("EVOCLAW_API_KEY"); !env_key.empty()) {
+        config.api_key = env_key;
     }
 
     if (config.api_key.empty()) {
