@@ -3,8 +3,10 @@
 #include "evolution/evolution_budget.hpp"
 #include "evolution/tension.hpp"
 #include "governance/governance_kernel.hpp"
+#include "llm/llm_client.hpp"
 #include "memory/org_log.hpp"
 
+#include <memory>
 #include <nlohmann/json.hpp>
 
 #include <string>
@@ -44,6 +46,8 @@ class Evolver {
 public:
     struct Config {
         double kpi_decline_threshold = 0.8;
+        double ewma_decay = 0.2;
+        double volatility_sensitivity = 0.2;
         int consecutive_failures = 10;
         double min_improvement = 0.05;
         double p_value_threshold = 0.05;
@@ -54,6 +58,8 @@ public:
 
     explicit Evolver(governance::GovernanceKernel& governance);
     Evolver(governance::GovernanceKernel& governance, Config config);
+
+    void set_llm_client(std::shared_ptr<llm::LLMClient> client);
 
     [[nodiscard]] std::vector<Tension> monitor(const memory::OrgLog& log);
     [[nodiscard]] std::vector<EvolutionProposal> propose(const std::vector<Tension>& tensions);
@@ -69,6 +75,7 @@ private:
     Config config_;
     governance::GovernanceKernel& governance_;
     EvolutionBudget budget_;
+    std::shared_ptr<llm::LLMClient> llm_client_;
 };
 
 } // namespace evoclaw::evolution

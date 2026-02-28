@@ -1,9 +1,12 @@
 #include "evolution/evolver.hpp"
 #include "governance/governance_kernel.hpp"
 #include "memory/org_log.hpp"
+#include "llm/llm_client.hpp"
 
 #include <gtest/gtest.h>
 #include <filesystem>
+#include <cstdlib>
+#include <string>
 
 namespace {
 
@@ -160,6 +163,84 @@ TEST_F(EvolverTest, ApplyEvolutionRequiresSignificance) {
     significant.improvement = 0.2;
 
     EXPECT_TRUE(evolver.apply_evolution(proposal, significant));
+}
+
+
+TEST_F(EvolverTest, MonitorAddsEwmaMetadata) {
+    evoclaw::memory::OrgLog log(test_dir_);
+
+    const std::vector<double> scores = {0.95, 0.9, 0.88, 0.55, 0.42, 0.35};
+    for (double score : scores) {
+        evoclaw::memory::OrgLogEntry e;
+        e.agent_id = "agent-ewma";
+        e.critic_score = score;
+        log.append(e);
+    }
+
+    evoclaw::evolution::Evolver::Config config;
+    config.kpi_decline_threshold = 0.75;
+    config.ewma_decay = 0.3;
+    config.volatility_sensitivity = 0.25;
+    evoclaw::evolution::Evolver evolver(*kernel_, config);
+
+    const auto tensions = evolver.monitor(log);
+    bool found = false;
+    for (const auto& tension : tensions) {
+        if (tension.type == evoclaw::evolution::TensionType::KPI_DECLINE &&
+            tension.source_agent == "agent-ewma") {
+            found = true;
+            EXPECT_TRUE(tension.metadata.contains("ewma_score"));
+            EXPECT_TRUE(tension.metadata.contains("ewma_volatility"));
+            EXPECT_TRUE(tension.metadata.contains("adaptive_threshold"));
+            EXPECT_GT(tension.metadata.value("adaptive_threshold", 0.0), 0.0);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST_F(EvolverTest, ProposeHasDefaultPatchValue) {
+    evoclaw::evolution::Evolver evolver(*kernel_);
+
+    evoclaw::evolution::Tension t;
+    t.id = "tension-default";
+    t.type = evoclaw::evolution::TensionType::KPI_DECLINE;
+    t.source_agent = "agent-default";
+    t.description = "score drop";
+    t.severity = "high";
+
+    const auto proposals = evolver.propose({t});
+    ASSERT_EQ(proposals.size(), 1);
+    EXPECT_TRUE(proposals[0].new_value.is_object());
+    EXPECT_TRUE(proposals[0].new_value.contains("action"));
+}
+
+TEST_F(EvolverTest, ProposeUsesLlmWhenLiveEnabled) {
+    const char* live_flag = std::getenv("EVOCLAW_LIVE_TEST");
+    if (live_flag == nullptr || std::string(live_flag) != "1") {
+        GTEST_SKIP() << "Set EVOCLAW_LIVE_TEST=1 to run live LLM proposal generation test.";
+    }
+
+    setenv("EVOCLAW_PROVIDER", "bailian", 1);
+    auto llm_client = std::make_shared<evoclaw::llm::LLMClient>(evoclaw::llm::create_from_env());
+    if (!llm_client || llm_client->is_mock_mode()) {
+        GTEST_SKIP() << "No live Bailian config available.";
+    }
+
+    evoclaw::evolution::Evolver evolver(*kernel_);
+    evolver.set_llm_client(llm_client);
+
+    evoclaw::evolution::Tension t;
+    t.id = "tension-live";
+    t.type = evoclaw::evolution::TensionType::KPI_DECLINE;
+    t.source_agent = "agent-live";
+    t.description = "quality has dropped for recent tasks";
+    t.severity = "high";
+
+    const auto proposals = evolver.propose({t});
+    ASSERT_EQ(proposals.size(), 1);
+    EXPECT_TRUE(proposals[0].new_value.is_object());
+    EXPECT_TRUE(proposals[0].new_value.contains("generated_by"));
+    EXPECT_EQ(proposals[0].new_value.value("generated_by", std::string()), "llm");
 }
 
 } // namespace

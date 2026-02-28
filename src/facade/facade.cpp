@@ -111,8 +111,9 @@ void EvoClawFacade::initialize() {
     event_log_ = std::make_unique<event_log::EventLog>(config_.log_dir / "event_log.jsonl");
 
     governance_ = std::make_unique<governance::GovernanceKernel>(load_constitution(config_.config_path));
-    evolver_ = std::make_unique<evolution::Evolver>(*governance_, config_.evolver_config);
     llm_client_ = std::make_shared<llm::LLMClient>(llm::create_from_env());
+    evolver_ = std::make_unique<evolution::Evolver>(*governance_, config_.evolver_config);
+    evolver_->set_llm_client(llm_client_);
     budget_tracker_ = std::make_shared<budget::BudgetTracker>();
 
     last_evolution_report_ = {

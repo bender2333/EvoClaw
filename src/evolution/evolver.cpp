@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -10,6 +11,11 @@
 
 namespace evoclaw::evolution {
 namespace {
+
+struct EwmaStats {
+    double score = 0.0;
+    double volatility = 0.0;
+};
 
 int estimate_word_tokens(const std::string& text) {
     std::istringstream iss(text);
@@ -27,6 +33,183 @@ int estimate_proposal_tokens(const Tension& tension) {
     return std::clamp(description_tokens + severity_tokens + 64, 64, 512);
 }
 
+std::string truncate_text(const std::string& text, std::size_t limit) {
+    if (text.size() <= limit) {
+        return text;
+    }
+    if (limit <= 3) {
+        return text.substr(0, limit);
+    }
+    return text.substr(0, limit - 3) + "...";
+}
+
+std::optional<nlohmann::json> parse_json_object(const std::string& text) {
+    try {
+        const auto parsed = nlohmann::json::parse(text);
+        if (parsed.is_object()) {
+            return parsed;
+        }
+    } catch (...) {
+    }
+
+    const std::size_t begin = text.find('{');
+    const std::size_t end = text.rfind('}');
+    if (begin == std::string::npos || end == std::string::npos || end < begin) {
+        return std::nullopt;
+    }
+
+    try {
+        const auto parsed = nlohmann::json::parse(text.substr(begin, end - begin + 1U));
+        if (parsed.is_object()) {
+            return parsed;
+        }
+    } catch (...) {
+    }
+
+    return std::nullopt;
+}
+
+EwmaStats compute_ewma_stats(const std::vector<double>& scores, const double decay) {
+    EwmaStats stats;
+    if (scores.empty()) {
+        return stats;
+    }
+
+    const double clamped_decay = std::clamp(decay, 0.01, 0.99);
+    stats.score = std::clamp(scores.front(), 0.0, 1.0);
+    stats.volatility = 0.0;
+
+    for (std::size_t i = 1; i < scores.size(); ++i) {
+        const double score = std::clamp(scores[i], 0.0, 1.0);
+        const double delta = std::abs(score - stats.score);
+        stats.score = clamped_decay * score + (1.0 - clamped_decay) * stats.score;
+        stats.volatility = clamped_decay * delta + (1.0 - clamped_decay) * stats.volatility;
+    }
+
+    return stats;
+}
+
+void assign_default_proposal_fields(const Tension& tension, EvolutionProposal* proposal) {
+    if (proposal == nullptr) {
+        return;
+    }
+
+    switch (tension.type) {
+        case TensionType::KPI_DECLINE:
+            proposal->type = EvolutionType::ADJUSTMENT;
+            proposal->description = "Adjust agent prompt to improve performance";
+            proposal->rationale = "KPI decline detected: " + tension.description;
+            proposal->new_value = {
+                {"action", "update_prompt"},
+                {"patch", {
+                    {"system_prompt_suffix", "Prioritize accuracy, grounding, and concise verification steps."}
+                }}
+            };
+            break;
+        case TensionType::REPEATED_FAILURE:
+            proposal->type = EvolutionType::REPLACEMENT;
+            proposal->description = "Replace or retrain agent due to repeated failures";
+            proposal->rationale = "Too many failures: " + tension.description;
+            proposal->new_value = {
+                {"action", "retrain_or_replace"},
+                {"patch", {
+                    {"temperature", 0.2},
+                    {"retry_policy", "strict_backoff"}
+                }}
+            };
+            break;
+        case TensionType::REFLECTION_SUGGESTION:
+            proposal->type = EvolutionType::ADJUSTMENT;
+            proposal->description = "Apply reflection-based improvements";
+            proposal->rationale = "Agent self-reflection suggested changes";
+            proposal->new_value = {
+                {"action", "apply_reflection_patch"},
+                {"patch", {
+                    {"enable_reflection_feedback", true}
+                }}
+            };
+            break;
+        case TensionType::MANUAL:
+            proposal->type = EvolutionType::ADJUSTMENT;
+            proposal->description = "Manual evolution trigger";
+            proposal->rationale = tension.description;
+            proposal->new_value = {
+                {"action", "manual_adjustment"},
+                {"patch", nlohmann::json::object()}
+            };
+            break;
+    }
+}
+
+bool enrich_proposal_with_llm(const Tension& tension,
+                              llm::LLMClient* llm_client,
+                              EvolutionProposal* proposal) {
+    if (llm_client == nullptr || proposal == nullptr) {
+        return false;
+    }
+
+    const std::string system_prompt =
+        "You are an evolution planner for a multi-agent system. "
+        "Return only JSON object with fields: description (string), rationale (string), "
+        "new_value (object patch). Keep it safe and reversible.";
+
+    nlohmann::json tension_json = {
+        {"id", tension.id},
+        {"type", static_cast<int>(tension.type)},
+        {"source_agent", tension.source_agent},
+        {"description", tension.description},
+        {"severity", tension.severity},
+        {"metadata", tension.metadata}
+    };
+
+    const std::string user_prompt =
+        "Generate one evolution proposal for this tension:\n" + tension_json.dump(2) +
+        "\nReturn strict JSON only.";
+
+    const auto response = llm_client->ask(system_prompt, user_prompt);
+    if (!response.success || response.content.empty()) {
+        return false;
+    }
+
+    const auto parsed = parse_json_object(response.content);
+    if (parsed.has_value()) {
+        const auto& obj = *parsed;
+
+        if (obj.contains("description") && obj["description"].is_string()) {
+            proposal->description = obj["description"].get<std::string>();
+        }
+        if (obj.contains("rationale") && obj["rationale"].is_string()) {
+            proposal->rationale = obj["rationale"].get<std::string>();
+        }
+
+        if (obj.contains("new_value") && obj["new_value"].is_object()) {
+            proposal->new_value = obj["new_value"];
+        } else if (obj.contains("patch") && obj["patch"].is_object()) {
+            proposal->new_value = {
+                {"action", "update_config"},
+                {"patch", obj["patch"]}
+            };
+        }
+    } else {
+        proposal->new_value = {
+            {"action", "update_prompt"},
+            {"patch", {
+                {"candidate_prompt", truncate_text(response.content, 600)}
+            }}
+        };
+    }
+
+    if (!proposal->new_value.is_object()) {
+        proposal->new_value = nlohmann::json::object();
+    }
+    proposal->new_value["generated_by"] = "llm";
+    proposal->new_value["model"] = llm_client->config().model;
+    proposal->new_value["prompt_tokens"] = response.prompt_tokens;
+    proposal->new_value["completion_tokens"] = response.completion_tokens;
+
+    return true;
+}
+
 } // namespace
 
 Evolver::Evolver(governance::GovernanceKernel& governance)
@@ -39,6 +222,10 @@ Evolver::Evolver(governance::GovernanceKernel& governance, Config config)
       governance_(governance),
       budget_(config_.max_evolution_cycles_per_hour, config_.evolution_token_budget) {}
 
+void Evolver::set_llm_client(std::shared_ptr<llm::LLMClient> client) {
+    llm_client_ = std::move(client);
+}
+
 std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) {
     std::vector<Tension> tensions;
 
@@ -47,34 +234,30 @@ std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) {
     }
     budget_.record_cycle();
 
-    // 获取所有 agent 的统计
     const auto& entries = log.all_entries();
     if (entries.empty()) {
         return tensions;
     }
 
-    // 按 agent 分组统计
     std::unordered_map<AgentId, std::vector<double>> agent_scores;
     std::unordered_map<AgentId, int> agent_failures;
 
     for (const auto& entry : entries) {
-        agent_scores[entry.agent_id].push_back(entry.critic_score);
+        agent_scores[entry.agent_id].push_back(std::clamp(entry.critic_score, 0.0, 1.0));
         if (entry.critic_score < 0.5) {
             agent_failures[entry.agent_id]++;
         }
     }
 
-    // 检测 KPI 下降
     for (const auto& [agent_id, scores] : agent_scores) {
         if (scores.size() < 2) {
             continue;
         }
 
-        double total = std::accumulate(scores.begin(), scores.end(), 0.0);
-        double avg = total / static_cast<double>(scores.size());
+        const double total = std::accumulate(scores.begin(), scores.end(), 0.0);
+        const double avg = total / static_cast<double>(scores.size());
 
-        // 最近 N 个的平均 vs 整体平均
-        std::size_t recent_n = std::min(scores.size() / 2, static_cast<std::size_t>(5));
+        const std::size_t recent_n = std::min(scores.size() / 2, static_cast<std::size_t>(5));
         if (recent_n == 0) {
             continue;
         }
@@ -83,23 +266,35 @@ std::vector<Tension> Evolver::monitor(const memory::OrgLog& log) {
         for (std::size_t i = scores.size() - recent_n; i < scores.size(); ++i) {
             recent_total += scores[i];
         }
-        double recent_avg = recent_total / static_cast<double>(recent_n);
+        const double recent_avg = recent_total / static_cast<double>(recent_n);
 
-        if (avg > 0.0 && recent_avg < avg * config_.kpi_decline_threshold) {
+        const EwmaStats ewma = compute_ewma_stats(scores, config_.ewma_decay);
+        const double adaptive_threshold = std::clamp(
+            config_.kpi_decline_threshold + ewma.volatility * config_.volatility_sensitivity,
+            0.5,
+            0.98);
+
+        if (avg > 0.0 && recent_avg < avg * adaptive_threshold) {
             Tension t;
             t.id = generate_uuid();
             t.type = TensionType::KPI_DECLINE;
             t.source_agent = agent_id;
             t.description = "KPI decline detected: recent avg " +
                             std::to_string(recent_avg) + " < threshold " +
-                            std::to_string(avg * config_.kpi_decline_threshold);
-            t.severity = "high";
-            t.metadata = {{"agent_id", agent_id}, {"recent_avg", recent_avg}, {"overall_avg", avg}};
+                            std::to_string(avg * adaptive_threshold);
+            t.severity = ewma.volatility > 0.2 ? "high" : "medium";
+            t.metadata = {
+                {"agent_id", agent_id},
+                {"recent_avg", recent_avg},
+                {"overall_avg", avg},
+                {"ewma_score", ewma.score},
+                {"ewma_volatility", ewma.volatility},
+                {"adaptive_threshold", adaptive_threshold}
+            };
             tensions.push_back(std::move(t));
         }
     }
 
-    // 检测连续失败
     for (const auto& [agent_id, failures] : agent_failures) {
         if (failures >= config_.consecutive_failures) {
             Tension t;
@@ -145,28 +340,10 @@ std::vector<EvolutionProposal> Evolver::propose(const std::vector<Tension>& tens
         proposal.id = generate_uuid();
         proposal.target_agent = tension.source_agent;
         proposal.tension_ids.push_back(tension.id);
+        assign_default_proposal_fields(tension, &proposal);
 
-        switch (tension.type) {
-            case TensionType::KPI_DECLINE:
-                proposal.type = EvolutionType::ADJUSTMENT;
-                proposal.description = "Adjust agent prompt to improve performance";
-                proposal.rationale = "KPI decline detected: " + tension.description;
-                break;
-            case TensionType::REPEATED_FAILURE:
-                proposal.type = EvolutionType::REPLACEMENT;
-                proposal.description = "Replace or retrain agent due to repeated failures";
-                proposal.rationale = "Too many failures: " + tension.description;
-                break;
-            case TensionType::REFLECTION_SUGGESTION:
-                proposal.type = EvolutionType::ADJUSTMENT;
-                proposal.description = "Apply reflection-based improvements";
-                proposal.rationale = "Agent self-reflection suggested changes";
-                break;
-            case TensionType::MANUAL:
-                proposal.type = EvolutionType::ADJUSTMENT;
-                proposal.description = "Manual evolution trigger";
-                proposal.rationale = tension.description;
-                break;
+        if (llm_client_ && !llm_client_->is_mock_mode()) {
+            enrich_proposal_with_llm(tension, llm_client_.get(), &proposal);
         }
 
         proposals.push_back(std::move(proposal));
@@ -187,8 +364,8 @@ ABTestResult Evolver::run_ab_test(const EvolutionProposal& proposal,
         return result;
     }
 
-    double control_sum = std::accumulate(control_scores.begin(), control_scores.end(), 0.0);
-    double candidate_sum = std::accumulate(candidate_scores.begin(), candidate_scores.end(), 0.0);
+    const double control_sum = std::accumulate(control_scores.begin(), control_scores.end(), 0.0);
+    const double candidate_sum = std::accumulate(candidate_scores.begin(), candidate_scores.end(), 0.0);
 
     result.control_score = control_sum / static_cast<double>(control_scores.size());
     result.candidate_score = candidate_sum / static_cast<double>(candidate_scores.size());
@@ -197,7 +374,6 @@ ABTestResult Evolver::run_ab_test(const EvolutionProposal& proposal,
         result.improvement = (result.candidate_score - result.control_score) / result.control_score;
     }
 
-    // 简化的显著性检验：改进超过阈值且样本量足够
     result.significant = (result.improvement >= config_.min_improvement) && (result.sample_size >= 5);
     result.p_value = result.significant ? 0.01 : 0.5;
 
@@ -206,12 +382,10 @@ ABTestResult Evolver::run_ab_test(const EvolutionProposal& proposal,
 
 bool Evolver::apply_evolution(const EvolutionProposal& proposal,
                               const ABTestResult& test_result) const {
-    // 检查改进是否显著
     if (!test_result.significant || test_result.improvement < config_.min_improvement) {
         return false;
     }
 
-    // 检查治理层是否允许
     nlohmann::json details = {
         {"proposal_id", proposal.id},
         {"improvement", test_result.improvement},
@@ -232,6 +406,8 @@ nlohmann::json Evolver::budget_status() const {
     nlohmann::json status = budget_.status();
     status["max_proposals_per_cycle"] = config_.max_proposals_per_cycle;
     status["evolution_token_budget"] = config_.evolution_token_budget;
+    status["ewma_decay"] = config_.ewma_decay;
+    status["volatility_sensitivity"] = config_.volatility_sensitivity;
     return status;
 }
 
