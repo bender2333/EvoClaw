@@ -61,15 +61,18 @@ void print_evolution_chain(const nlohmann::json& status) {
                   << " | improvement=" << ab.value("improvement", 0.0)
                   << " | sample=" << ab.value("sample_size", 0)
                   << " | confidence=" << ab.value("confidence", 0.0)
-                  << " | reason=" << proposal.value("rejection_reason", "none")
-                  << std::endl;
+                  << " | reason=" << proposal.value("rejection_reason", "none");
+        if (proposal.value("runtime_patch_applied", false)) {
+            std::cout << " | PATCHED";
+        }
+        std::cout << std::endl;
     }
 }
 
 } // namespace
 
 int main() {
-    std::cout << "=== EvoClaw Evolution Demo (P4) ===" << std::endl;
+    std::cout << "=== EvoClaw Evolution Demo (P4+P5) ===" << std::endl;
 
     evoclaw::facade::EvoClawFacade::Config config;
     config.log_dir = "./demo_logs";
@@ -127,6 +130,41 @@ int main() {
 
     const auto status = facade.get_status();
     print_evolution_chain(status);
+
+    // --- P5: Runtime Config & Rollback Demo ---
+    std::cout << "\n=== P5: Runtime Config & Rollback ===" << std::endl;
+
+    const auto before_config = facade.get_agent_runtime_config("executor-1");
+    std::cout << "executor-1 temperature (before): "
+              << before_config.value("temperature", -1.0) << std::endl;
+
+    const auto snapshots = facade.list_rollback_snapshots();
+    std::cout << "Rollback snapshots stored: " << snapshots.size() << std::endl;
+
+    for (const auto& snap : snapshots) {
+        const auto pid = snap.value("proposal_id", "");
+        std::cout << "  snapshot: proposal=" << pid
+                  << " agent=" << snap.value("agent_id", "") << std::endl;
+
+        std::string reason;
+        const bool rolled_back = facade.rollback_proposal(pid, &reason);
+        std::cout << "  rollback " << pid << ": "
+                  << (rolled_back ? "OK" : ("FAIL: " + reason)) << std::endl;
+    }
+
+    const auto after_config = facade.get_agent_runtime_config("executor-1");
+    std::cout << "executor-1 temperature (after rollback): "
+              << after_config.value("temperature", -1.0) << std::endl;
+
+    // Schema validation demo
+    std::string schema_err;
+    const bool valid = evoclaw::facade::EvoClawFacade::validate_patch_schema(
+        {{"temperature", 0.5}, {"system_prompt_suffix", "be careful"}}, &schema_err);
+    std::cout << "\nSchema validation (valid patch): " << (valid ? "PASS" : "FAIL") << std::endl;
+
+    const bool invalid = evoclaw::facade::EvoClawFacade::validate_patch_schema(
+        {{"temperature", 0.5}, {"evil_field", "drop table"}}, &schema_err);
+    std::cout << "Schema validation (invalid patch): " << (invalid ? "PASS" : ("REJECT: " + schema_err)) << std::endl;
 
     const bool integrity = facade.verify_event_log();
     std::cout << "\nEvent log integrity: " << (integrity ? "PASS" : "FAIL") << std::endl;
