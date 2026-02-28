@@ -195,6 +195,212 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
     failed.task_id = task.id;
     failed.success = false;
 
+    const auto find_agent_by_role = [this](const std::string& expected_role) {
+        for (const auto& [_, agent_ptr] : agents_) {
+            if (agent_ptr && agent_ptr->role() == expected_role) {
+                return agent_ptr;
+            }
+        }
+        return std::shared_ptr<agent::Agent>{};
+    };
+
+    const auto planner_agent = find_agent_by_role("planner");
+    const auto executor_agent = find_agent_by_role("executor");
+    const auto critic_agent = find_agent_by_role("critic");
+    const bool use_pipeline = task.type == TaskType::EXECUTE && static_cast<bool>(executor_agent);
+
+    if (use_pipeline) {
+        const int stage_count = 1 + (planner_agent ? 1 : 0) + (critic_agent ? 1 : 0);
+        if (task.budget.max_rounds > 0 && stage_count > task.budget.max_rounds) {
+            failed.output = "Budget exceeded: required pipeline rounds exceed max_rounds";
+            failed.metadata = {
+                {"reason", "budget_rounds_exceeded"},
+                {"required_rounds", stage_count},
+                {"max_rounds", task.budget.max_rounds}
+            };
+            return failed;
+        }
+        if (task.budget.max_tool_calls > 0 && stage_count > task.budget.max_tool_calls) {
+            failed.output = "Budget exceeded: required pipeline calls exceed max_tool_calls";
+            failed.metadata = {
+                {"reason", "budget_tool_calls_exceeded"},
+                {"required_calls", stage_count},
+                {"max_tool_calls", task.budget.max_tool_calls}
+            };
+            return failed;
+        }
+
+        const int per_stage_max_tokens =
+            task.budget.max_tokens > 0
+                ? std::max(1, task.budget.max_tokens / std::max(1, stage_count))
+                : task.budget.max_tokens;
+
+        auto stage_task_template = task;
+        stage_task_template.context["internal_call"] = true;
+
+        auto stage_budget = task.budget;
+        if (per_stage_max_tokens > 0) {
+            stage_budget.max_tokens = per_stage_max_tokens;
+        }
+        if (stage_budget.max_rounds > 0) {
+            stage_budget.max_rounds = 1;
+        }
+        if (stage_budget.max_tool_calls > 0) {
+            stage_budget.max_tool_calls = std::max(1, stage_budget.max_tool_calls / std::max(1, stage_count));
+        }
+
+        const auto pipeline_start = std::chrono::steady_clock::now();
+        nlohmann::json pipeline_stages = nlohmann::json::array();
+
+        auto execute_stage = [&](const std::shared_ptr<agent::Agent>& stage_agent,
+                                 const std::string& stage_name,
+                                 const nlohmann::json& stage_context) {
+            agent::Task stage_task = stage_task_template;
+            stage_task.budget = stage_budget;
+            stage_task.context["pipeline_stage"] = stage_name;
+            for (const auto& [key, value] : stage_context.items()) {
+                stage_task.context[key] = value;
+            }
+
+            const auto stage_begin = std::chrono::steady_clock::now();
+            agent::TaskResult stage_result = stage_agent->execute(stage_task);
+            const auto stage_end = std::chrono::steady_clock::now();
+
+            if (budget_tracker_) {
+                budget_tracker_->record(
+                    stage_agent->id(),
+                    stage_agent->prompt_tokens_consumed(),
+                    stage_agent->completion_tokens_consumed());
+            }
+            if (zone_manager_) {
+                zone_manager_->record_result(stage_agent->id(), stage_result.success);
+                if (zone_manager_->is_promotion_eligible(stage_agent->id())) {
+                    zone_manager_->promote_to_stable(stage_agent->id());
+                }
+            }
+
+            const double stage_duration_ms =
+                static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(stage_end - stage_begin)
+                                        .count());
+            pipeline_stages.push_back({
+                {"stage", stage_name},
+                {"agent_id", stage_agent->id()},
+                {"success", stage_result.success},
+                {"confidence", stage_result.confidence},
+                {"duration_ms", stage_duration_ms},
+                {"metadata", stage_result.metadata}
+            });
+
+            return stage_result;
+        };
+
+        std::string plan_output;
+        if (planner_agent) {
+            const auto planner_result = execute_stage(
+                planner_agent,
+                "plan",
+                {{"intent", "plan"}, {"task_rounds", 1}, {"required_permissions", nlohmann::json::array()}});
+            if (planner_result.success) {
+                plan_output = planner_result.output;
+            }
+        }
+
+        const auto executor_result = execute_stage(
+            executor_agent,
+            "execute",
+            {{"intent", "execute"},
+             {"plan", plan_output},
+             {"task_rounds", 1},
+             {"required_permissions", nlohmann::json::array()}});
+
+        agent::TaskResult result = executor_result;
+        if (result.agent_id.empty()) {
+            result.agent_id = executor_agent->id();
+        }
+
+        double critic_score = extract_critic_score(task, result);
+        if (critic_agent) {
+            nlohmann::json critique_context = {
+                {"intent", "critique"},
+                {"target_agent", executor_agent->id()},
+                {"result_output", executor_result.output},
+                {"result_confidence", executor_result.confidence},
+                {"success", executor_result.success},
+                {"task_rounds", 1},
+                {"required_permissions", nlohmann::json::array()}
+            };
+            const auto critique_result = execute_stage(critic_agent, "critique", critique_context);
+            if (critique_result.success) {
+                critic_score = extract_critic_score(task, critique_result);
+                result.metadata["critic"] = critique_result.metadata;
+                result.metadata["critic_output"] = critique_result.output;
+
+                const std::string verdict =
+                    critique_result.metadata.value("verdict", std::string("accept"));
+                if (verdict == "reject" || critic_score < 0.7) {
+                    result.success = false;
+                }
+            }
+        }
+
+        const auto pipeline_end = std::chrono::steady_clock::now();
+        const double total_duration_ms =
+            static_cast<double>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(pipeline_end - pipeline_start).count());
+
+        result.metadata["pipeline"] = {
+            {"enabled", true},
+            {"stage_count", stage_count},
+            {"stages", pipeline_stages},
+            {"budget", {
+                {"max_tokens", task.budget.max_tokens},
+                {"max_tool_calls", task.budget.max_tool_calls},
+                {"max_rounds", task.budget.max_rounds},
+                {"per_stage_max_tokens", per_stage_max_tokens}
+            }}
+        };
+
+        memory::OrgLogEntry org_entry;
+        org_entry.task_id = task.id;
+        org_entry.agent_id = result.agent_id;
+        org_entry.module_version = executor_agent->contract().version;
+        org_entry.duration_ms = total_duration_ms;
+        org_entry.critic_score = critic_score;
+        org_entry.user_feedback_positive = critic_score >= 0.7;
+        org_entry.metadata = {
+            {"description", task.description},
+            {"context", task.context},
+            {"effective_budget_max_tokens", task.budget.max_tokens},
+            {"success", result.success},
+            {"confidence", result.confidence},
+            {"result_metadata", result.metadata}
+        };
+        org_log_->append(org_entry);
+
+        event_log::Event event;
+        event.type = result.success ? event_log::EventType::TASK_COMPLETE : event_log::EventType::TASK_FAILED;
+        event.actor = org_entry.agent_id;
+        event.target = task.id;
+        event.action = result.success ? "task_completed" : "task_failed";
+        event.details = make_event_details(task, result, total_duration_ms, critic_score);
+        event_log_->append(std::move(event));
+
+        emit_event({
+            {"event", result.success ? "task_complete" : "task_failed"},
+            {"task_id", task.id},
+            {"agent_id", org_entry.agent_id},
+            {"success", result.success},
+            {"confidence", result.confidence},
+            {"critic_score", critic_score},
+            {"duration_ms", total_duration_ms},
+            {"metadata", result.metadata},
+            {"message", result.success ? "Task " + task.id + " completed"
+                                        : "Task " + task.id + " failed"}
+        });
+
+        return result;
+    }
+
     const auto routed_agent = router_->route(task);
     if (!routed_agent.has_value()) {
         failed.output = "No agent available for task";
@@ -264,13 +470,11 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
         }
     }
 
-    // Record token consumption to budget tracker
     if (budget_tracker_) {
         budget_tracker_->record(
             agent_it->second->id(),
             agent_it->second->prompt_tokens_consumed(),
-            agent_it->second->completion_tokens_consumed()
-        );
+            agent_it->second->completion_tokens_consumed());
     }
 
     const double duration_ms =
