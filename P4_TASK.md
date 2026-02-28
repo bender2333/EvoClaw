@@ -83,6 +83,31 @@
 - 进化提案由 LLM 生成且可被治理层审查
 - 测试全通过，回归无破坏
 
+## P5 延伸：运行时配置热补与回滚
+
+### P5.1 Agent 运行时配置快照与热补
+- `runtime_config()`: 获取 agent 当前运行时配置快照
+- `apply_runtime_patch(patch, reason)`: 原子性应用 patch，验证失败自动回滚
+- `restore_runtime_config(snapshot, reason)`: 从快照恢复配置
+- 支持字段：system_prompt, system_prompt_suffix, temperature, success_rate_threshold, estimated_cost_token, intent_tags, required_tools, module_version
+
+### P5.2 进化提案应用时自动补丁
+- Evolution pipeline 在 apply 成功后，自动调用 `apply_runtime_patch`
+- 记录 `config_before` / `config_after` 到提案报告
+- 记录 `CONFIG_CHANGE` 事件到 EventLog
+
+### P5.3 回滚快照存储与恢复
+- `RollbackSnapshot`: 存储 proposal_id → agent_id, config_before, config_after, applied_at
+- `rollback_proposal(proposal_id)`: 从快照恢复 agent 配置
+- `list_rollback_snapshots()`: 列出所有可用快照
+- Governance 触发 rollback 时自动恢复配置
+
+### P5.4 Patch Schema 白名单校验
+- `validate_patch_schema(patch, reason)`: 静态校验 patch 字段合法性
+- 拒绝未知字段、类型不匹配
+- 支持嵌套 `patch` envelope 解包
+- 在应用 patch 前强制校验
+
 ## 当前进度
 - [x] P4.1 LLM 接入与配置（Bailian `kimi-k2.5` live 已验证）
 - [x] P4.2 Agent 真执行链路（Planner -> Executor -> Critic）
