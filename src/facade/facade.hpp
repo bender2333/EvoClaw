@@ -62,6 +62,7 @@ public:
     [[nodiscard]] nlohmann::json get_entropy_status() const;
     [[nodiscard]] nlohmann::json get_agent_runtime_config(const AgentId& agent_id) const;
     bool rollback_proposal(const std::string& proposal_id, std::string* reason = nullptr);
+    [[nodiscard]] static bool validate_patch_schema(const nlohmann::json& patch, std::string* reason = nullptr);
     [[nodiscard]] nlohmann::json list_rollback_snapshots() const;
     [[nodiscard]] bool verify_event_log() const;
 

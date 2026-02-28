@@ -299,6 +299,28 @@ TEST_F(IntegrationTest, RollbackSnapshotStoresAndRestoresConfig) {
     EXPECT_EQ(restored["system_prompt"], before["system_prompt"]);
 }
 
+
+TEST_F(IntegrationTest, ValidatePatchSchemaRejectsUnknownFields) {
+    std::string reason;
+    EXPECT_TRUE(evoclaw::facade::EvoClawFacade::validate_patch_schema(
+        {{"temperature", 0.5}, {"system_prompt_suffix", "be careful"}}, &reason));
+
+    EXPECT_FALSE(evoclaw::facade::EvoClawFacade::validate_patch_schema(
+        {{"temperature", 0.5}, {"malicious_field", "drop table"}}, &reason));
+    EXPECT_NE(reason.find("unknown field"), std::string::npos);
+
+    EXPECT_FALSE(evoclaw::facade::EvoClawFacade::validate_patch_schema(
+        {{"temperature", "not_a_number"}}, &reason));
+    EXPECT_NE(reason.find("must be a number"), std::string::npos);
+
+    EXPECT_TRUE(evoclaw::facade::EvoClawFacade::validate_patch_schema(
+        {{"patch", {{"temperature", 0.7}}}}, &reason));
+
+    EXPECT_FALSE(evoclaw::facade::EvoClawFacade::validate_patch_schema(
+        {{"patch", {{"evil", true}}}}, &reason));
+    EXPECT_NE(reason.find("unknown field"), std::string::npos);
+}
+
 TEST(IntegrationLiveTest, ExecutePipelineWithBailianWhenEnabled) {
     const char* live_flag = std::getenv("EVOCLAW_LIVE_TEST");
     if (live_flag == nullptr || std::string(live_flag) != "1") {

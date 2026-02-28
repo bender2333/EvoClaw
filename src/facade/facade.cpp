@@ -759,6 +759,12 @@ void EvoClawFacade::run_evolution_cycle() {
                         ? proposal.new_value["patch"]
                         : proposal.new_value;
 
+                std::string schema_error;
+                if (!validate_patch_schema(patch_payload, &schema_error)) {
+                    applied = false;
+                    rejection_reason = "schema_invalid:" + schema_error;
+                } else {
+
                 config_before = target_it->second->runtime_config();
 
                 std::string patch_error;
@@ -790,6 +796,7 @@ void EvoClawFacade::run_evolution_cycle() {
                     };
                     event_log_->append(std::move(config_event));
                 }
+                } // end schema-valid else
             }
         } else {
             if (!test_result.min_sample_met) {
@@ -958,6 +965,51 @@ nlohmann::json EvoClawFacade::get_agent_runtime_config(const AgentId& agent_id) 
         return nlohmann::json{{"error", "agent_not_found"}, {"agent_id", agent_id}};
     }
     return it->second->runtime_config();
+}
+
+bool EvoClawFacade::validate_patch_schema(const nlohmann::json& patch, std::string* reason) {
+    if (!patch.is_object()) {
+        if (reason) *reason = "patch must be a JSON object";
+        return false;
+    }
+
+    static const std::unordered_map<std::string, std::string> allowed_fields = {
+        {"system_prompt",           "string"},
+        {"system_prompt_suffix",    "string"},
+        {"temperature",             "number"},
+        {"success_rate_threshold",  "number"},
+        {"estimated_cost_token",    "number"},
+        {"intent_tags",             "array"},
+        {"required_tools",          "array"},
+        {"module_version",          "string"},
+    };
+
+    for (const auto& [key, val] : patch.items()) {
+        if (key == "patch") {
+            // nested patch envelope — validate inner
+            return validate_patch_schema(val, reason);
+        }
+        const auto it = allowed_fields.find(key);
+        if (it == allowed_fields.end()) {
+            if (reason) *reason = "unknown field: " + key;
+            return false;
+        }
+        const auto& expected_type = it->second;
+        if (expected_type == "string" && !val.is_string()) {
+            if (reason) *reason = key + " must be a string";
+            return false;
+        }
+        if (expected_type == "number" && !val.is_number()) {
+            if (reason) *reason = key + " must be a number";
+            return false;
+        }
+        if (expected_type == "array" && !val.is_array()) {
+            if (reason) *reason = key + " must be an array";
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool EvoClawFacade::rollback_proposal(const std::string& proposal_id, std::string* reason) {
