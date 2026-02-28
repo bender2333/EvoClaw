@@ -39,6 +39,8 @@ struct ABTestResult {
     double improvement = 0.0;
     int sample_size = 0;
     double p_value = 1.0;
+    bool min_sample_met = false;
+    double confidence = 0.0;
     bool significant = false;
 };
 
@@ -50,6 +52,8 @@ public:
         double volatility_sensitivity = 0.2;
         int consecutive_failures = 10;
         double min_improvement = 0.05;
+        int min_sample_size = 8;
+        double confidence_threshold = 0.8;
         double p_value_threshold = 0.05;
         int max_evolution_cycles_per_hour = 5;
         int max_proposals_per_cycle = 3;

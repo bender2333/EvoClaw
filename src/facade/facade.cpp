@@ -721,7 +721,7 @@ void EvoClawFacade::run_evolution_cycle() {
         if (control_scores.empty()) {
             control_scores = {0.6, 0.6, 0.6, 0.6, 0.6};
         }
-        while (control_scores.size() < 5U) {
+        while (control_scores.size() < 8U) {
             control_scores.push_back(control_scores.back());
         }
 
@@ -734,6 +734,30 @@ void EvoClawFacade::run_evolution_cycle() {
         const auto test_result = evolver_->run_ab_test(proposal, control_scores, candidate_scores);
         const bool applied = evolver_->apply_evolution(proposal, test_result);
 
+        const bool rollback_triggered =
+            governance_ && governance_->should_rollback(
+                proposal.target_agent, test_result.candidate_score, test_result.control_score);
+
+        const bool requires_confirmation =
+            proposal.type == evolution::EvolutionType::REPLACEMENT ||
+            proposal.type == evolution::EvolutionType::RESTRUCTURING ||
+            (proposal.new_value.is_object() && proposal.new_value.value("high_risk", false));
+
+        std::string rejection_reason = "none";
+        if (!applied) {
+            if (!test_result.min_sample_met) {
+                rejection_reason = "insufficient_sample";
+            } else if (!test_result.significant) {
+                rejection_reason = "not_significant";
+            } else if (rollback_triggered) {
+                rejection_reason = "rollback_guard";
+            } else if (requires_confirmation) {
+                rejection_reason = "requires_confirmation";
+            } else {
+                rejection_reason = "governance_denied";
+            }
+        }
+
         if (applied) {
             report["applied_count"] = report["applied_count"].get<int>() + 1;
         }
@@ -745,14 +769,20 @@ void EvoClawFacade::run_evolution_cycle() {
             {"description", proposal.description},
             {"rationale", proposal.rationale},
             {"tension_ids", proposal.tension_ids},
+            {"new_value", proposal.new_value},
             {"ab_test", {
                 {"control_score", test_result.control_score},
                 {"candidate_score", test_result.candidate_score},
                 {"improvement", test_result.improvement},
                 {"sample_size", test_result.sample_size},
+                {"min_sample_met", test_result.min_sample_met},
                 {"p_value", test_result.p_value},
+                {"confidence", test_result.confidence},
                 {"significant", test_result.significant}
             }},
+            {"requires_confirmation", requires_confirmation},
+            {"rollback_triggered", rollback_triggered},
+            {"rejection_reason", rejection_reason},
             {"applied", applied}
         });
 
@@ -765,10 +795,31 @@ void EvoClawFacade::run_evolution_cycle() {
             {"proposal_id", proposal.id},
             {"type", evolution_type_to_string(proposal.type)},
             {"improvement", test_result.improvement},
+            {"sample_size", test_result.sample_size},
+            {"min_sample_met", test_result.min_sample_met},
             {"significant", test_result.significant},
-            {"p_value", test_result.p_value}
+            {"p_value", test_result.p_value},
+            {"confidence", test_result.confidence},
+            {"requires_confirmation", requires_confirmation},
+            {"rollback_triggered", rollback_triggered},
+            {"rejection_reason", rejection_reason}
         };
         event_log_->append(std::move(proposal_event));
+
+        if (rollback_triggered) {
+            event_log::Event rollback_event;
+            rollback_event.type = event_log::EventType::ROLLBACK;
+            rollback_event.actor = "governance";
+            rollback_event.target = proposal.target_agent;
+            rollback_event.action = "rollback_triggered";
+            rollback_event.details = {
+                {"proposal_id", proposal.id},
+                {"control_score", test_result.control_score},
+                {"candidate_score", test_result.candidate_score},
+                {"improvement", test_result.improvement}
+            };
+            event_log_->append(std::move(rollback_event));
+        }
 
         emit_event({
             {"event", applied ? "proposal_applied" : "proposal_rejected"},
@@ -776,10 +827,16 @@ void EvoClawFacade::run_evolution_cycle() {
             {"type", evolution_type_to_string(proposal.type)},
             {"target_agent", proposal.target_agent},
             {"improvement", test_result.improvement},
+            {"sample_size", test_result.sample_size},
+            {"min_sample_met", test_result.min_sample_met},
             {"significant", test_result.significant},
             {"p_value", test_result.p_value},
+            {"confidence", test_result.confidence},
+            {"requires_confirmation", requires_confirmation},
+            {"rollback_triggered", rollback_triggered},
+            {"rejection_reason", rejection_reason},
             {"message", applied ? ("Proposal " + proposal.id + " applied")
-                                : ("Proposal " + proposal.id + " rejected")}
+                                : ("Proposal " + proposal.id + " rejected: " + rejection_reason)}
         });
     }
 

@@ -114,38 +114,67 @@ TEST_F(EvolverTest, ProposeGeneratesProposals) {
 }
 
 TEST_F(EvolverTest, ABTestSignificantImprovement) {
-    evoclaw::evolution::Evolver evolver(*kernel_);
+    evoclaw::evolution::Evolver::Config config;
+    config.min_sample_size = 5;
+    config.confidence_threshold = 0.7;
+    evoclaw::evolution::Evolver evolver(*kernel_, config);
 
     evoclaw::evolution::EvolutionProposal proposal;
     proposal.id = "p1";
     proposal.target_agent = "agent-a";
 
-    std::vector<double> control = {0.5, 0.5, 0.5, 0.5, 0.5};
-    std::vector<double> candidate = {0.8, 0.8, 0.8, 0.8, 0.8};
+    std::vector<double> control = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
+    std::vector<double> candidate = {0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8};
 
     auto result = evolver.run_ab_test(proposal, control, candidate);
+    EXPECT_TRUE(result.min_sample_met);
     EXPECT_TRUE(result.significant);
     EXPECT_GT(result.improvement, 0.05);
+    EXPECT_GT(result.confidence, 0.7);
     EXPECT_NEAR(result.control_score, 0.5, 0.01);
     EXPECT_NEAR(result.candidate_score, 0.8, 0.01);
 }
 
 TEST_F(EvolverTest, ABTestInsignificantImprovement) {
-    evoclaw::evolution::Evolver evolver(*kernel_);
+    evoclaw::evolution::Evolver::Config config;
+    config.min_sample_size = 5;
+    config.confidence_threshold = 0.7;
+    evoclaw::evolution::Evolver evolver(*kernel_, config);
 
     evoclaw::evolution::EvolutionProposal proposal;
     proposal.id = "p2";
     proposal.target_agent = "agent-a";
 
-    std::vector<double> control = {0.8, 0.8, 0.8, 0.8, 0.8};
-    std::vector<double> candidate = {0.81, 0.81, 0.81, 0.81, 0.81};
+    std::vector<double> control = {0.8, 0.8, 0.8, 0.8, 0.8, 0.8};
+    std::vector<double> candidate = {0.81, 0.81, 0.81, 0.81, 0.81, 0.81};
 
     auto result = evolver.run_ab_test(proposal, control, candidate);
     EXPECT_FALSE(result.significant);
 }
 
+
+TEST_F(EvolverTest, ABTestRequiresMinSample) {
+    evoclaw::evolution::Evolver::Config config;
+    config.min_sample_size = 8;
+    config.confidence_threshold = 0.7;
+    evoclaw::evolution::Evolver evolver(*kernel_, config);
+
+    evoclaw::evolution::EvolutionProposal proposal;
+    proposal.id = "p-sample";
+    proposal.target_agent = "agent-a";
+
+    std::vector<double> control = {0.5, 0.5, 0.5, 0.5, 0.5};
+    std::vector<double> candidate = {0.9, 0.9, 0.9, 0.9, 0.9};
+
+    const auto result = evolver.run_ab_test(proposal, control, candidate);
+    EXPECT_FALSE(result.min_sample_met);
+    EXPECT_FALSE(result.significant);
+}
+
 TEST_F(EvolverTest, ApplyEvolutionRequiresSignificance) {
-    evoclaw::evolution::Evolver evolver(*kernel_);
+    evoclaw::evolution::Evolver::Config config;
+    config.confidence_threshold = 0.7;
+    evoclaw::evolution::Evolver evolver(*kernel_, config);
 
     evoclaw::evolution::EvolutionProposal proposal;
     proposal.id = "p3";
@@ -154,13 +183,20 @@ TEST_F(EvolverTest, ApplyEvolutionRequiresSignificance) {
 
     evoclaw::evolution::ABTestResult insignificant;
     insignificant.significant = false;
+    insignificant.min_sample_met = false;
+    insignificant.confidence = 0.2;
     insignificant.improvement = 0.01;
 
     EXPECT_FALSE(evolver.apply_evolution(proposal, insignificant));
 
     evoclaw::evolution::ABTestResult significant;
     significant.significant = true;
+    significant.min_sample_met = true;
+    significant.sample_size = 12;
+    significant.confidence = 0.95;
     significant.improvement = 0.2;
+    significant.control_score = 0.6;
+    significant.candidate_score = 0.8;
 
     EXPECT_TRUE(evolver.apply_evolution(proposal, significant));
 }

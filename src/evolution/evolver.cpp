@@ -89,6 +89,30 @@ EwmaStats compute_ewma_stats(const std::vector<double>& scores, const double dec
     return stats;
 }
 
+double sample_variance(const std::vector<double>& values) {
+    if (values.size() < 2U) {
+        return 0.0;
+    }
+
+    const double mean = std::accumulate(values.begin(), values.end(), 0.0) /
+                        static_cast<double>(values.size());
+    double squared = 0.0;
+    for (double value : values) {
+        const double delta = value - mean;
+        squared += delta * delta;
+    }
+    return squared / static_cast<double>(values.size() - 1U);
+}
+
+double normal_cdf(const double value) {
+    return 0.5 * std::erfc(-value / std::sqrt(2.0));
+}
+
+double two_sided_p_value_from_z(const double z) {
+    const double cdf = normal_cdf(std::abs(z));
+    return std::clamp(2.0 * (1.0 - cdf), 0.0, 1.0);
+}
+
 void assign_default_proposal_fields(const Tension& tension, EvolutionProposal* proposal) {
     if (proposal == nullptr) {
         return;
@@ -359,43 +383,98 @@ ABTestResult Evolver::run_ab_test(const EvolutionProposal& proposal,
     result.control_id = proposal.target_agent;
     result.candidate_id = proposal.target_agent + "_candidate";
     result.sample_size = static_cast<int>(std::min(control_scores.size(), candidate_scores.size()));
+    result.min_sample_met = result.sample_size >= std::max(1, config_.min_sample_size);
 
     if (control_scores.empty() || candidate_scores.empty()) {
         return result;
     }
 
-    const double control_sum = std::accumulate(control_scores.begin(), control_scores.end(), 0.0);
-    const double candidate_sum = std::accumulate(candidate_scores.begin(), candidate_scores.end(), 0.0);
+    std::vector<double> clipped_control;
+    std::vector<double> clipped_candidate;
+    clipped_control.reserve(control_scores.size());
+    clipped_candidate.reserve(candidate_scores.size());
 
-    result.control_score = control_sum / static_cast<double>(control_scores.size());
-    result.candidate_score = candidate_sum / static_cast<double>(candidate_scores.size());
-
-    if (result.control_score > 0.0) {
-        result.improvement = (result.candidate_score - result.control_score) / result.control_score;
+    for (double value : control_scores) {
+        clipped_control.push_back(std::clamp(value, 0.0, 1.0));
+    }
+    for (double value : candidate_scores) {
+        clipped_candidate.push_back(std::clamp(value, 0.0, 1.0));
     }
 
-    result.significant = (result.improvement >= config_.min_improvement) && (result.sample_size >= 5);
-    result.p_value = result.significant ? 0.01 : 0.5;
+    const double control_sum = std::accumulate(clipped_control.begin(), clipped_control.end(), 0.0);
+    const double candidate_sum = std::accumulate(clipped_candidate.begin(), clipped_candidate.end(), 0.0);
+
+    result.control_score = control_sum / static_cast<double>(clipped_control.size());
+    result.candidate_score = candidate_sum / static_cast<double>(clipped_candidate.size());
+
+    const double mean_delta = result.candidate_score - result.control_score;
+    if (result.control_score > 1e-9) {
+        result.improvement = mean_delta / result.control_score;
+    } else {
+        result.improvement = mean_delta;
+    }
+
+    const double control_variance = sample_variance(clipped_control);
+    const double candidate_variance = sample_variance(clipped_candidate);
+    const double n_control = static_cast<double>(clipped_control.size());
+    const double n_candidate = static_cast<double>(clipped_candidate.size());
+    const double standard_error = std::sqrt((control_variance / n_control) + (candidate_variance / n_candidate));
+
+    if (standard_error > 1e-9) {
+        const double z = mean_delta / standard_error;
+        result.p_value = two_sided_p_value_from_z(z);
+    } else {
+        result.p_value = mean_delta > 0.0 ? 0.0 : 1.0;
+    }
+
+    result.confidence = std::clamp(1.0 - result.p_value, 0.0, 1.0);
+
+    result.significant = result.min_sample_met &&
+                         result.improvement >= config_.min_improvement &&
+                         result.p_value <= config_.p_value_threshold &&
+                         result.confidence >= config_.confidence_threshold;
 
     return result;
 }
 
 bool Evolver::apply_evolution(const EvolutionProposal& proposal,
                               const ABTestResult& test_result) const {
-    if (!test_result.significant || test_result.improvement < config_.min_improvement) {
+    if (!test_result.min_sample_met || !test_result.significant ||
+        test_result.improvement < config_.min_improvement ||
+        test_result.confidence < config_.confidence_threshold) {
         return false;
     }
+
+    const bool requires_confirmation =
+        proposal.type == EvolutionType::REPLACEMENT ||
+        proposal.type == EvolutionType::RESTRUCTURING ||
+        (proposal.new_value.is_object() && proposal.new_value.value("high_risk", false));
 
     nlohmann::json details = {
         {"proposal_id", proposal.id},
         {"improvement", test_result.improvement},
-        {"p_value", test_result.p_value}
+        {"p_value", test_result.p_value},
+        {"confidence", test_result.confidence},
+        {"sample_size", test_result.sample_size},
+        {"requires_confirmation", requires_confirmation},
+        {"high_impact", requires_confirmation}
     };
 
     auto permission = governance_.evaluate_action(
         "evolver", proposal.description, details);
 
-    return permission == governance::Permission::ALLOW;
+    if (permission != governance::Permission::ALLOW) {
+        return false;
+    }
+
+    if (governance_.should_rollback(
+            proposal.target_agent,
+            test_result.candidate_score,
+            test_result.control_score)) {
+        return false;
+    }
+
+    return true;
 }
 
 bool Evolver::can_evolve() const {
@@ -408,6 +487,8 @@ nlohmann::json Evolver::budget_status() const {
     status["evolution_token_budget"] = config_.evolution_token_budget;
     status["ewma_decay"] = config_.ewma_decay;
     status["volatility_sensitivity"] = config_.volatility_sensitivity;
+    status["min_sample_size"] = config_.min_sample_size;
+    status["confidence_threshold"] = config_.confidence_threshold;
     return status;
 }
 
