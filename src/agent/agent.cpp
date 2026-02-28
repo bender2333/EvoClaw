@@ -74,6 +74,15 @@ bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason
         return false;
     }
 
+    const AgentConfig backup = config_;
+    const auto fail = [&](const std::string& message) {
+        config_ = backup;
+        if (reason) {
+            *reason = message;
+        }
+        return false;
+    };
+
     bool changed = false;
 
     if (patch.contains("system_prompt") && patch["system_prompt"].is_string()) {
@@ -95,10 +104,7 @@ bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason
     if (patch.contains("temperature") && patch["temperature"].is_number()) {
         const double temperature = patch["temperature"].get<double>();
         if (temperature < 0.0 || temperature > 2.0) {
-            if (reason) {
-                *reason = "temperature must be in [0, 2]";
-            }
-            return false;
+            return fail("temperature must be in [0, 2]");
         }
         config_.temperature = temperature;
         changed = true;
@@ -107,10 +113,7 @@ bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason
     if (patch.contains("success_rate_threshold") && patch["success_rate_threshold"].is_number()) {
         const double threshold = patch["success_rate_threshold"].get<double>();
         if (threshold < 0.0 || threshold > 1.0) {
-            if (reason) {
-                *reason = "success_rate_threshold must be in [0, 1]";
-            }
-            return false;
+            return fail("success_rate_threshold must be in [0, 1]");
         }
         config_.contract.capability.success_rate_threshold = threshold;
         changed = true;
@@ -119,10 +122,7 @@ bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason
     if (patch.contains("estimated_cost_token") && patch["estimated_cost_token"].is_number()) {
         const double cost = patch["estimated_cost_token"].get<double>();
         if (cost <= 0.0) {
-            if (reason) {
-                *reason = "estimated_cost_token must be positive";
-            }
-            return false;
+            return fail("estimated_cost_token must be positive");
         }
         config_.contract.capability.estimated_cost_token = cost;
         changed = true;
@@ -132,10 +132,7 @@ bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason
         std::vector<std::string> tags;
         for (const auto& item : patch["intent_tags"]) {
             if (!item.is_string()) {
-                if (reason) {
-                    *reason = "intent_tags must be an array of strings";
-                }
-                return false;
+                return fail("intent_tags must be an array of strings");
             }
             tags.push_back(item.get<std::string>());
         }
@@ -147,10 +144,7 @@ bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason
         std::vector<std::string> tools;
         for (const auto& item : patch["required_tools"]) {
             if (!item.is_string()) {
-                if (reason) {
-                    *reason = "required_tools must be an array of strings";
-                }
-                return false;
+                return fail("required_tools must be an array of strings");
             }
             tools.push_back(item.get<std::string>());
         }
@@ -163,11 +157,11 @@ bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason
         changed = true;
     }
 
-    if (!changed && reason) {
-        *reason = "patch had no supported fields";
+    if (!changed) {
+        return fail("patch had no supported fields");
     }
 
-    return changed;
+    return true;
 }
 
 bool Agent::restore_runtime_config(const nlohmann::json& snapshot, std::string* reason) {

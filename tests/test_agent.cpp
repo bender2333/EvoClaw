@@ -148,4 +148,25 @@ TEST(AgentTest, RuntimePatchAndRestore) {
     EXPECT_DOUBLE_EQ(restored_config["temperature"].get<double>(), before["temperature"].get<double>());
 }
 
+
+TEST(AgentTest, RuntimePatchFailureDoesNotMutateConfig) {
+    evoclaw::agent::Executor executor(make_config(
+        "executor-patch-fail", "executor", make_contract("executor.module", {"execute"}, {"shell"})));
+
+    const auto before = executor.runtime_config();
+    std::string error;
+
+    const bool patched = executor.apply_runtime_patch({
+        {"system_prompt_suffix", "temp suffix"},
+        {"temperature", 3.0}
+    }, &error);
+
+    EXPECT_FALSE(patched);
+    EXPECT_NE(error.find("temperature"), std::string::npos);
+
+    const auto after = executor.runtime_config();
+    EXPECT_EQ(after["system_prompt"], before["system_prompt"]);
+    EXPECT_DOUBLE_EQ(after["temperature"].get<double>(), before["temperature"].get<double>());
+}
+
 } // namespace
