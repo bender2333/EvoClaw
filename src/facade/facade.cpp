@@ -732,7 +732,7 @@ void EvoClawFacade::run_evolution_cycle() {
         }
 
         const auto test_result = evolver_->run_ab_test(proposal, control_scores, candidate_scores);
-        const bool applied = evolver_->apply_evolution(proposal, test_result);
+        bool applied = evolver_->apply_evolution(proposal, test_result);
 
         const bool rollback_triggered =
             governance_ && governance_->should_rollback(
@@ -743,8 +743,47 @@ void EvoClawFacade::run_evolution_cycle() {
             proposal.type == evolution::EvolutionType::RESTRUCTURING ||
             (proposal.new_value.is_object() && proposal.new_value.value("high_risk", false));
 
+        nlohmann::json config_before = nlohmann::json::object();
+        nlohmann::json config_after = nlohmann::json::object();
+        bool runtime_patch_applied = false;
+
         std::string rejection_reason = "none";
-        if (!applied) {
+        if (applied) {
+            const auto target_it = agents_.find(proposal.target_agent);
+            if (target_it == agents_.end() || !target_it->second) {
+                applied = false;
+                rejection_reason = "target_agent_missing";
+            } else {
+                const auto patch_payload =
+                    (proposal.new_value.is_object() && proposal.new_value.contains("patch"))
+                        ? proposal.new_value["patch"]
+                        : proposal.new_value;
+
+                config_before = target_it->second->runtime_config();
+
+                std::string patch_error;
+                if (!target_it->second->apply_runtime_patch(patch_payload, &patch_error)) {
+                    applied = false;
+                    rejection_reason = patch_error.empty() ? "patch_apply_failed"
+                                                           : ("patch_apply_failed:" + patch_error);
+                } else {
+                    runtime_patch_applied = true;
+                    config_after = target_it->second->runtime_config();
+
+                    event_log::Event config_event;
+                    config_event.type = event_log::EventType::CONFIG_CHANGE;
+                    config_event.actor = "evolver";
+                    config_event.target = proposal.target_agent;
+                    config_event.action = "runtime_patch_applied";
+                    config_event.details = {
+                        {"proposal_id", proposal.id},
+                        {"before", config_before},
+                        {"after", config_after}
+                    };
+                    event_log_->append(std::move(config_event));
+                }
+            }
+        } else {
             if (!test_result.min_sample_met) {
                 rejection_reason = "insufficient_sample";
             } else if (!test_result.significant) {
@@ -782,6 +821,9 @@ void EvoClawFacade::run_evolution_cycle() {
             }},
             {"requires_confirmation", requires_confirmation},
             {"rollback_triggered", rollback_triggered},
+            {"runtime_patch_applied", runtime_patch_applied},
+            {"config_before", config_before},
+            {"config_after", config_after},
             {"rejection_reason", rejection_reason},
             {"applied", applied}
         });
@@ -802,6 +844,7 @@ void EvoClawFacade::run_evolution_cycle() {
             {"confidence", test_result.confidence},
             {"requires_confirmation", requires_confirmation},
             {"rollback_triggered", rollback_triggered},
+            {"runtime_patch_applied", runtime_patch_applied},
             {"rejection_reason", rejection_reason}
         };
         event_log_->append(std::move(proposal_event));
@@ -834,6 +877,7 @@ void EvoClawFacade::run_evolution_cycle() {
             {"confidence", test_result.confidence},
             {"requires_confirmation", requires_confirmation},
             {"rollback_triggered", rollback_triggered},
+            {"runtime_patch_applied", runtime_patch_applied},
             {"rejection_reason", rejection_reason},
             {"message", applied ? ("Proposal " + proposal.id + " applied")
                                 : ("Proposal " + proposal.id + " rejected: " + rejection_reason)}
@@ -880,6 +924,14 @@ void EvoClawFacade::ensure_initialized() const {
         !entropy_monitor_ || !event_log_ || !governance_ || !evolver_) {
         throw std::runtime_error("EvoClawFacade is not initialized");
     }
+}
+
+nlohmann::json EvoClawFacade::get_agent_runtime_config(const AgentId& agent_id) const {
+    const auto it = agents_.find(agent_id);
+    if (it == agents_.end() || !it->second) {
+        return nlohmann::json{{"error", "agent_not_found"}, {"agent_id", agent_id}};
+    }
+    return it->second->runtime_config();
 }
 
 bool EvoClawFacade::verify_event_log() const {

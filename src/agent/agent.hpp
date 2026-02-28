@@ -67,6 +67,10 @@ public:
     void set_message_bus(std::shared_ptr<protocol::MessageBus> bus) { bus_ = std::move(bus); }
     void set_llm_client(std::shared_ptr<llm::LLMClient> client) { llm_client_ = std::move(client); }
 
+    [[nodiscard]] nlohmann::json runtime_config() const;
+    [[nodiscard]] bool apply_runtime_patch(const nlohmann::json& patch, std::string* reason = nullptr);
+    [[nodiscard]] bool restore_runtime_config(const nlohmann::json& snapshot, std::string* reason = nullptr);
+
     void reset_token_consumption();
     [[nodiscard]] int tokens_consumed() const { return tokens_consumed_; }
     [[nodiscard]] int prompt_tokens_consumed() const { return prompt_tokens_consumed_; }

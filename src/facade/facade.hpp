@@ -60,6 +60,7 @@ public:
     [[nodiscard]] nlohmann::json get_zone_status() const;
     [[nodiscard]] nlohmann::json get_pattern_status() const;
     [[nodiscard]] nlohmann::json get_entropy_status() const;
+    [[nodiscard]] nlohmann::json get_agent_runtime_config(const AgentId& agent_id) const;
     [[nodiscard]] bool verify_event_log() const;
 
 private:

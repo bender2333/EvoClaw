@@ -1,6 +1,7 @@
 #include "agent/agent.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace evoclaw::agent {
@@ -46,6 +47,166 @@ void Agent::on_message(const protocol::Message& msg) {
     (void)msg;
 }
 
+
+
+nlohmann::json Agent::runtime_config() const {
+    return {
+        {"id", config_.id},
+        {"role", config_.role},
+        {"system_prompt", config_.system_prompt},
+        {"temperature", config_.temperature},
+        {"contract", {
+            {"module_id", config_.contract.module_id},
+            {"version", config_.contract.version},
+            {"success_rate_threshold", config_.contract.capability.success_rate_threshold},
+            {"estimated_cost_token", config_.contract.capability.estimated_cost_token},
+            {"intent_tags", config_.contract.capability.intent_tags},
+            {"required_tools", config_.contract.capability.required_tools}
+        }}
+    };
+}
+
+bool Agent::apply_runtime_patch(const nlohmann::json& patch, std::string* reason) {
+    if (!patch.is_object()) {
+        if (reason) {
+            *reason = "patch must be a JSON object";
+        }
+        return false;
+    }
+
+    bool changed = false;
+
+    if (patch.contains("system_prompt") && patch["system_prompt"].is_string()) {
+        config_.system_prompt = patch["system_prompt"].get<std::string>();
+        changed = true;
+    }
+
+    if (patch.contains("system_prompt_suffix") && patch["system_prompt_suffix"].is_string()) {
+        const auto suffix = patch["system_prompt_suffix"].get<std::string>();
+        if (!suffix.empty()) {
+            if (!config_.system_prompt.empty() && config_.system_prompt.back() != '\n') {
+                config_.system_prompt.push_back('\n');
+            }
+            config_.system_prompt += suffix;
+            changed = true;
+        }
+    }
+
+    if (patch.contains("temperature") && patch["temperature"].is_number()) {
+        const double temperature = patch["temperature"].get<double>();
+        if (temperature < 0.0 || temperature > 2.0) {
+            if (reason) {
+                *reason = "temperature must be in [0, 2]";
+            }
+            return false;
+        }
+        config_.temperature = temperature;
+        changed = true;
+    }
+
+    if (patch.contains("success_rate_threshold") && patch["success_rate_threshold"].is_number()) {
+        const double threshold = patch["success_rate_threshold"].get<double>();
+        if (threshold < 0.0 || threshold > 1.0) {
+            if (reason) {
+                *reason = "success_rate_threshold must be in [0, 1]";
+            }
+            return false;
+        }
+        config_.contract.capability.success_rate_threshold = threshold;
+        changed = true;
+    }
+
+    if (patch.contains("estimated_cost_token") && patch["estimated_cost_token"].is_number()) {
+        const double cost = patch["estimated_cost_token"].get<double>();
+        if (cost <= 0.0) {
+            if (reason) {
+                *reason = "estimated_cost_token must be positive";
+            }
+            return false;
+        }
+        config_.contract.capability.estimated_cost_token = cost;
+        changed = true;
+    }
+
+    if (patch.contains("intent_tags") && patch["intent_tags"].is_array()) {
+        std::vector<std::string> tags;
+        for (const auto& item : patch["intent_tags"]) {
+            if (!item.is_string()) {
+                if (reason) {
+                    *reason = "intent_tags must be an array of strings";
+                }
+                return false;
+            }
+            tags.push_back(item.get<std::string>());
+        }
+        config_.contract.capability.intent_tags = std::move(tags);
+        changed = true;
+    }
+
+    if (patch.contains("required_tools") && patch["required_tools"].is_array()) {
+        std::vector<std::string> tools;
+        for (const auto& item : patch["required_tools"]) {
+            if (!item.is_string()) {
+                if (reason) {
+                    *reason = "required_tools must be an array of strings";
+                }
+                return false;
+            }
+            tools.push_back(item.get<std::string>());
+        }
+        config_.contract.capability.required_tools = std::move(tools);
+        changed = true;
+    }
+
+    if (patch.contains("module_version") && patch["module_version"].is_string()) {
+        config_.contract.version = patch["module_version"].get<std::string>();
+        changed = true;
+    }
+
+    if (!changed && reason) {
+        *reason = "patch had no supported fields";
+    }
+
+    return changed;
+}
+
+bool Agent::restore_runtime_config(const nlohmann::json& snapshot, std::string* reason) {
+    if (!snapshot.is_object()) {
+        if (reason) {
+            *reason = "snapshot must be a JSON object";
+        }
+        return false;
+    }
+
+    nlohmann::json patch = nlohmann::json::object();
+    if (snapshot.contains("system_prompt")) {
+        patch["system_prompt"] = snapshot["system_prompt"];
+    }
+    if (snapshot.contains("temperature")) {
+        patch["temperature"] = snapshot["temperature"];
+    }
+
+    if (snapshot.contains("contract") && snapshot["contract"].is_object()) {
+        const auto& contract = snapshot["contract"];
+        if (contract.contains("version")) {
+            patch["module_version"] = contract["version"];
+        }
+        if (contract.contains("success_rate_threshold")) {
+            patch["success_rate_threshold"] = contract["success_rate_threshold"];
+        }
+        if (contract.contains("estimated_cost_token")) {
+            patch["estimated_cost_token"] = contract["estimated_cost_token"];
+        }
+        if (contract.contains("intent_tags")) {
+            patch["intent_tags"] = contract["intent_tags"];
+        }
+        if (contract.contains("required_tools")) {
+            patch["required_tools"] = contract["required_tools"];
+        }
+    }
+
+    return apply_runtime_patch(patch, reason);
+}
 void Agent::reset_token_consumption() {
     tokens_consumed_ = 0;
     prompt_tokens_consumed_ = 0;

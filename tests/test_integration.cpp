@@ -173,6 +173,64 @@ TEST_F(IntegrationTest, PipelineRespectsRoundBudget) {
 }
 
 
+
+TEST_F(IntegrationTest, EvolutionAppliesRuntimePatchToAgentConfig) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 3;
+    config.evolver_config.consecutive_failures = 100;
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+
+    auto executor = std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config("executor-1", "executor", {"execute"}));
+    facade.register_agent(executor);
+
+    const auto before = facade.get_agent_runtime_config("executor-1");
+    ASSERT_TRUE(before.contains("system_prompt"));
+
+    for (int i = 0; i < 10; ++i) {
+        evoclaw::agent::Task task;
+        task.id = "evo-kpi-" + std::to_string(i);
+        task.description = "score-seeded route task";
+        task.type = evoclaw::TaskType::ROUTE;
+        task.context["intent"] = "execute";
+        task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+        task.context["score"] = (i < 6) ? 0.9 : 0.8;
+
+        const auto result = facade.submit_task(task);
+        EXPECT_TRUE(result.success);
+    }
+
+    facade.trigger_evolution();
+
+    const auto after = facade.get_agent_runtime_config("executor-1");
+    ASSERT_TRUE(after.contains("system_prompt"));
+
+    const std::string before_prompt = before["system_prompt"].get<std::string>();
+    const std::string after_prompt = after["system_prompt"].get<std::string>();
+
+    EXPECT_NE(after_prompt, before_prompt);
+    EXPECT_NE(after_prompt.find("Prioritize accuracy"), std::string::npos);
+
+    const auto status = facade.get_status();
+    ASSERT_TRUE(status.contains("evolution"));
+    const auto cycle = status["evolution"].value("last_cycle", nlohmann::json::object());
+    ASSERT_TRUE(cycle.contains("proposals"));
+
+    bool saw_runtime_patch = false;
+    for (const auto& proposal : cycle["proposals"]) {
+        if (proposal.value("applied", false) && proposal.value("runtime_patch_applied", false)) {
+            saw_runtime_patch = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(saw_runtime_patch);
+}
+
 TEST(IntegrationLiveTest, ExecutePipelineWithBailianWhenEnabled) {
     const char* live_flag = std::getenv("EVOCLAW_LIVE_TEST");
     if (live_flag == nullptr || std::string(live_flag) != "1") {

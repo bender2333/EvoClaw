@@ -117,4 +117,35 @@ TEST(AgentTest, CriticExecuteAndReflect) {
     EXPECT_FALSE(reflection.improvements.empty());
 }
 
+
+TEST(AgentTest, RuntimePatchAndRestore) {
+    evoclaw::agent::Executor executor(make_config(
+        "executor-patch", "executor", make_contract("executor.module", {"execute"}, {"shell"})));
+
+    const auto before = executor.runtime_config();
+
+    std::string error;
+    const bool patched = executor.apply_runtime_patch({
+        {"system_prompt_suffix", "Always verify outputs."},
+        {"temperature", 0.4},
+        {"success_rate_threshold", 0.82},
+        {"required_tools", nlohmann::json::array({"shell", "git"})}
+    }, &error);
+
+    EXPECT_TRUE(patched) << error;
+
+    const auto after = executor.runtime_config();
+    EXPECT_NE(after["system_prompt"], before["system_prompt"]);
+    EXPECT_DOUBLE_EQ(after["temperature"].get<double>(), 0.4);
+    EXPECT_DOUBLE_EQ(after["contract"]["success_rate_threshold"].get<double>(), 0.82);
+    EXPECT_EQ(after["contract"]["required_tools"].size(), 2);
+
+    const bool restored = executor.restore_runtime_config(before, &error);
+    EXPECT_TRUE(restored) << error;
+
+    const auto restored_config = executor.runtime_config();
+    EXPECT_EQ(restored_config["system_prompt"], before["system_prompt"]);
+    EXPECT_DOUBLE_EQ(restored_config["temperature"].get<double>(), before["temperature"].get<double>());
+}
+
 } // namespace
