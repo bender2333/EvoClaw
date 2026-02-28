@@ -82,3 +82,11 @@
 - 可用 Bailian Kimi2.5 跑通端到端任务
 - 进化提案由 LLM 生成且可被治理层审查
 - 测试全通过，回归无破坏
+
+## 当前进度
+- [x] P4.1 LLM 接入与配置（Bailian `kimi-k2.5` live 已验证）
+- [x] P4.2 Agent 真执行链路（Planner -> Executor -> Critic）
+- [x] P4.3 进化引擎升级（EWMA + LLM 提案）
+- [x] P4.4 A/B 与门禁增强（min sample + confidence + rollback signal）
+- [x] P4.5 测试与示例（80+ 测试 + live 测试 + evolution demo 链路输出）
+

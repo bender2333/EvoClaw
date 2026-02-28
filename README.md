@@ -4,12 +4,13 @@ EvoClaw — 以组织进化为核心的 C++ AI 管家系统
 
 ## 项目概述
 
-EvoClaw 是一个自进化多 Agent 组织框架，实现了从 v1.0 到 v4.0 的完整设计演进：
+EvoClaw 是一个自进化多 Agent 组织框架，实现了从 v1.0 到 v4.0 的完整设计演进，并在 P4 阶段补齐了真实 LLM 与进化门禁能力：
 
 - **v1 核心**：多 Agent 组织 + 通信协议 + 进化闭环
 - **v2 评估层**：双评估（Meta Judge）+ 挑战集 + 资源预算
 - **v3 工具化**：UMI 通用接口 + SLP 语义原语 + Safety Airbag
 - **v4 双区架构**：稳定区/探索区 + Compiler + 反熵机制
+- **P4 增强**：Bailian Kimi2.5 实接 + 执行流水线 + EWMA 监控 + LLM 进化提案 + A/B 置信门禁
 
 ## 架构（6 层）
 
@@ -47,7 +48,15 @@ make -j4
 ### 运行测试
 
 ```bash
-./tests/evoclaw_test
+cd build
+ctest --output-on-failure
+```
+
+### 运行 Live 测试（Bailian）
+
+```bash
+cd build
+EVOCLAW_LIVE_TEST=1 ctest -R "(EvolverTest.ProposeUsesLlmWhenLiveEnabled|LLMTest.LiveBailianRequestWhenEnabled|IntegrationLiveTest.ExecutePipelineWithBailianWhenEnabled)" --output-on-failure
 ```
 
 ### 运行示例
@@ -131,6 +140,9 @@ EvoClaw/
 ### Evolution（evolution/）
 - `Evolver`：张力监控、提案生成、A/B 测试、进化应用
 - `Tension`：张力信号（KPI 下降、重复失败等）
+- **EWMA 自适应监控**：输出 `ewma_score` / `ewma_volatility` / `adaptive_threshold`
+- **LLM 提案增强**：可由 Bailian `kimi-k2.5` 生成结构化 `new_value` patch
+- **门禁增强**：最小样本量、p-value、confidence、rollback signal
 
 ### Facade（facade/）
 - `EvoClawFacade`：系统门面（初始化、任务提交、触发进化）
@@ -141,7 +153,7 @@ EvoClaw/
 ./tests/evoclaw_test
 ```
 
-50+ 测试覆盖：
+80+ 测试覆盖：
 - Core：UUID、时间戳
 - Protocol：序列化/反序列化、消息总线
 - UMI：契约验证
@@ -177,9 +189,9 @@ facade.trigger_evolution();
 运行 `./examples/evoclaw_evolution_demo` 查看完整演示：
 - 初始化系统
 - 注册 Planner/Executor/Critic
-- 运行 10 个任务
-- 显示系统状态和能力矩阵
+- 运行成功与失败混合任务，制造真实张力
 - 触发进化循环
+- 打印完整链路：`tension -> proposal -> ab_test -> apply/reject`
 - 验证事件日志完整性
 
 ## 技术栈
@@ -192,3 +204,19 @@ facade.trigger_evolution();
 ## 许可证
 
 MIT License
+
+## LLM 配置
+
+EvoClaw 默认从 `~/.openclaw/openclaw.json` 读取 provider 配置，优先顺序：
+
+1. 环境变量覆盖（`EVOCLAW_API_KEY`, `EVOCLAW_BASE_URL`, `EVOCLAW_MODEL`, `EVOCLAW_PROVIDER`）
+2. `bailian` provider
+3. `mynewapi` provider
+4. providers 中的第一个可用项
+
+推荐使用：
+
+- Provider: `bailian`
+- Model: `kimi-k2.5`
+
+若未配置 API key，系统自动回退 mock 模式。
