@@ -231,6 +231,74 @@ TEST_F(IntegrationTest, EvolutionAppliesRuntimePatchToAgentConfig) {
     EXPECT_TRUE(saw_runtime_patch);
 }
 
+
+TEST_F(IntegrationTest, RollbackSnapshotStoresAndRestoresConfig) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 3;
+    config.evolver_config.consecutive_failures = 100;
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+
+    auto executor = std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config("executor-rollback", "executor", {"execute"}));
+    facade.register_agent(executor);
+
+    const auto before = facade.get_agent_runtime_config("executor-rollback");
+
+    for (int i = 0; i < 10; ++i) {
+        evoclaw::agent::Task task;
+        task.id = "rollback-kpi-" + std::to_string(i);
+        task.description = "score task";
+        task.type = evoclaw::TaskType::ROUTE;
+        task.context["intent"] = "execute";
+        task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+        task.context["score"] = (i < 6) ? 0.9 : 0.8;
+        facade.submit_task(task);
+    }
+
+    facade.trigger_evolution();
+
+    const auto status = facade.get_status();
+    const auto cycle = status["evolution"].value("last_cycle", nlohmann::json::object());
+    ASSERT_TRUE(cycle.contains("proposals"));
+
+    std::string applied_proposal_id;
+    for (const auto& proposal : cycle["proposals"]) {
+        if (proposal.value("applied", false) && proposal.value("runtime_patch_applied", false)) {
+            applied_proposal_id = proposal["id"].get<std::string>();
+            break;
+        }
+    }
+    ASSERT_FALSE(applied_proposal_id.empty());
+
+    const auto snapshots = facade.list_rollback_snapshots();
+    bool found = false;
+    for (const auto& snap : snapshots) {
+        if (snap["proposal_id"] == applied_proposal_id) {
+            found = true;
+            EXPECT_EQ(snap["agent_id"].get<std::string>(), "executor-rollback");
+            EXPECT_TRUE(snap.contains("config_before"));
+            EXPECT_TRUE(snap.contains("config_after"));
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+
+    const auto after = facade.get_agent_runtime_config("executor-rollback");
+    EXPECT_NE(after["system_prompt"], before["system_prompt"]);
+
+    std::string reason;
+    const bool rolled_back = facade.rollback_proposal(applied_proposal_id, &reason);
+    EXPECT_TRUE(rolled_back) << reason;
+
+    const auto restored = facade.get_agent_runtime_config("executor-rollback");
+    EXPECT_EQ(restored["system_prompt"], before["system_prompt"]);
+}
+
 TEST(IntegrationLiveTest, ExecutePipelineWithBailianWhenEnabled) {
     const char* live_flag = std::getenv("EVOCLAW_LIVE_TEST");
     if (live_flag == nullptr || std::string(live_flag) != "1") {

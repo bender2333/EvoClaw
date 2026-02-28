@@ -770,6 +770,13 @@ void EvoClawFacade::run_evolution_cycle() {
                     runtime_patch_applied = true;
                     config_after = target_it->second->runtime_config();
 
+                    rollback_snapshots_[proposal.id] = RollbackSnapshot{
+                        proposal.target_agent,
+                        config_before,
+                        config_after,
+                        evoclaw::now()
+                    };
+
                     event_log::Event config_event;
                     config_event.type = event_log::EventType::CONFIG_CHANGE;
                     config_event.actor = "evolver";
@@ -778,7 +785,8 @@ void EvoClawFacade::run_evolution_cycle() {
                     config_event.details = {
                         {"proposal_id", proposal.id},
                         {"before", config_before},
-                        {"after", config_after}
+                        {"after", config_after},
+                        {"snapshot_stored", true}
                     };
                     event_log_->append(std::move(config_event));
                 }
@@ -849,7 +857,25 @@ void EvoClawFacade::run_evolution_cycle() {
         };
         event_log_->append(std::move(proposal_event));
 
-        if (rollback_triggered) {
+        if (rollback_triggered && runtime_patch_applied) {
+            std::string rollback_error;
+            const bool rolled_back = rollback_proposal(proposal.id, &rollback_error);
+
+            event_log::Event rollback_event;
+            rollback_event.type = event_log::EventType::ROLLBACK;
+            rollback_event.actor = "governance";
+            rollback_event.target = proposal.target_agent;
+            rollback_event.action = rolled_back ? "rollback_applied" : "rollback_failed";
+            rollback_event.details = {
+                {"proposal_id", proposal.id},
+                {"control_score", test_result.control_score},
+                {"candidate_score", test_result.candidate_score},
+                {"improvement", test_result.improvement},
+                {"rollback_success", rolled_back},
+                {"rollback_error", rollback_error}
+            };
+            event_log_->append(std::move(rollback_event));
+        } else if (rollback_triggered) {
             event_log::Event rollback_event;
             rollback_event.type = event_log::EventType::ROLLBACK;
             rollback_event.actor = "governance";
@@ -933,6 +959,56 @@ nlohmann::json EvoClawFacade::get_agent_runtime_config(const AgentId& agent_id) 
     }
     return it->second->runtime_config();
 }
+
+bool EvoClawFacade::rollback_proposal(const std::string& proposal_id, std::string* reason) {
+    const auto snap_it = rollback_snapshots_.find(proposal_id);
+    if (snap_it == rollback_snapshots_.end()) {
+        if (reason) *reason = "no snapshot found for proposal " + proposal_id;
+        return false;
+    }
+
+    const auto& snapshot = snap_it->second;
+    const auto agent_it = agents_.find(snapshot.agent_id);
+    if (agent_it == agents_.end() || !agent_it->second) {
+        if (reason) *reason = "target agent " + snapshot.agent_id + " not found";
+        return false;
+    }
+
+    std::string restore_error;
+    if (!agent_it->second->restore_runtime_config(snapshot.config_before, &restore_error)) {
+        if (reason) *reason = "restore failed: " + restore_error;
+        return false;
+    }
+
+    event_log::Event evt;
+    evt.type = event_log::EventType::CONFIG_CHANGE;
+    evt.actor = "facade";
+    evt.target = snapshot.agent_id;
+    evt.action = "rollback_restored";
+    evt.details = {
+        {"proposal_id", proposal_id},
+        {"restored_config", snapshot.config_before}
+    };
+    event_log_->append(std::move(evt));
+
+    rollback_snapshots_.erase(snap_it);
+    return true;
+}
+
+nlohmann::json EvoClawFacade::list_rollback_snapshots() const {
+    auto result = nlohmann::json::array();
+    for (const auto& [id, snap] : rollback_snapshots_) {
+        result.push_back({
+            {"proposal_id", id},
+            {"agent_id", snap.agent_id},
+            {"applied_at", timestamp_to_string(snap.applied_at)},
+            {"config_before", snap.config_before},
+            {"config_after", snap.config_after}
+        });
+    }
+    return result;
+}
+
 
 bool EvoClawFacade::verify_event_log() const {
     if (!event_log_) return true;

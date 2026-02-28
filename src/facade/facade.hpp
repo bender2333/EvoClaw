@@ -61,6 +61,8 @@ public:
     [[nodiscard]] nlohmann::json get_pattern_status() const;
     [[nodiscard]] nlohmann::json get_entropy_status() const;
     [[nodiscard]] nlohmann::json get_agent_runtime_config(const AgentId& agent_id) const;
+    bool rollback_proposal(const std::string& proposal_id, std::string* reason = nullptr);
+    [[nodiscard]] nlohmann::json list_rollback_snapshots() const;
     [[nodiscard]] bool verify_event_log() const;
 
 private:
@@ -82,6 +84,14 @@ private:
     std::shared_ptr<slp::SLPCompressor> slp_compressor_;
 
     std::unordered_map<AgentId, std::shared_ptr<agent::Agent>> agents_;
+    struct RollbackSnapshot {
+        AgentId agent_id;
+        nlohmann::json config_before;
+        nlohmann::json config_after;
+        Timestamp applied_at;
+    };
+
+    std::unordered_map<std::string, RollbackSnapshot> rollback_snapshots_;
     nlohmann::json last_evolution_report_;
     EventCallback event_callback_;
     mutable std::mutex event_callback_mutex_;
