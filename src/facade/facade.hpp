@@ -64,6 +64,9 @@ public:
     bool rollback_proposal(const std::string& proposal_id, std::string* reason = nullptr);
     [[nodiscard]] static bool validate_patch_schema(const nlohmann::json& patch, std::string* reason = nullptr);
     [[nodiscard]] nlohmann::json list_rollback_snapshots() const;
+    void save_snapshots() const;
+    void load_snapshots();
+    void clear_expired_snapshots(std::chrono::seconds max_age);
     [[nodiscard]] bool verify_event_log() const;
 
 private:

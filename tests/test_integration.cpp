@@ -321,6 +321,101 @@ TEST_F(IntegrationTest, ValidatePatchSchemaRejectsUnknownFields) {
     EXPECT_NE(reason.find("unknown field"), std::string::npos);
 }
 
+
+TEST_F(IntegrationTest, SnapshotPersistenceRoundTrip) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 3;
+    config.evolver_config.consecutive_failures = 100;
+
+    {
+        evoclaw::facade::EvoClawFacade facade(config);
+        facade.initialize();
+
+        auto executor = std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config("executor-persist", "executor", {"execute"}));
+        facade.register_agent(executor);
+
+        for (int i = 0; i < 10; ++i) {
+            evoclaw::agent::Task task;
+            task.id = "persist-kpi-" + std::to_string(i);
+            task.description = "score task";
+            task.type = evoclaw::TaskType::ROUTE;
+            task.context["intent"] = "execute";
+            task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+            task.context["score"] = (i < 6) ? 0.9 : 0.8;
+            (void)facade.submit_task(task);
+        }
+
+        facade.trigger_evolution();
+
+        const auto snapshots_before = facade.list_rollback_snapshots();
+        ASSERT_FALSE(snapshots_before.empty());
+
+        facade.save_state();
+    }
+
+    EXPECT_TRUE(std::filesystem::exists(test_dir_ / "snapshots.json"));
+
+    {
+        evoclaw::facade::EvoClawFacade facade2(config);
+        facade2.initialize();
+
+        auto executor2 = std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config("executor-persist", "executor", {"execute"}));
+        facade2.register_agent(executor2);
+
+        const auto snapshots_after = facade2.list_rollback_snapshots();
+        ASSERT_FALSE(snapshots_after.empty());
+        EXPECT_EQ(snapshots_after[0]["agent_id"].get<std::string>(), "executor-persist");
+
+        const auto pid = snapshots_after[0]["proposal_id"].get<std::string>();
+        std::string reason;
+        const bool rolled_back = facade2.rollback_proposal(pid, &reason);
+        EXPECT_TRUE(rolled_back) << reason;
+    }
+}
+
+TEST_F(IntegrationTest, ClearExpiredSnapshotsRemovesOldEntries) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 3;
+    config.evolver_config.consecutive_failures = 100;
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+
+    auto executor = std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config("executor-expire", "executor", {"execute"}));
+    facade.register_agent(executor);
+
+    for (int i = 0; i < 10; ++i) {
+        evoclaw::agent::Task task;
+        task.id = "expire-kpi-" + std::to_string(i);
+        task.description = "score task";
+        task.type = evoclaw::TaskType::ROUTE;
+        task.context["intent"] = "execute";
+        task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+        task.context["score"] = (i < 6) ? 0.9 : 0.8;
+        (void)facade.submit_task(task);
+    }
+
+    facade.trigger_evolution();
+
+    const auto before = facade.list_rollback_snapshots();
+    ASSERT_FALSE(before.empty());
+
+    facade.clear_expired_snapshots(std::chrono::seconds(0));
+
+    const auto after = facade.list_rollback_snapshots();
+    EXPECT_TRUE(after.empty());
+}
+
 TEST(IntegrationLiveTest, ExecutePipelineWithBailianWhenEnabled) {
     const char* live_flag = std::getenv("EVOCLAW_LIVE_TEST");
     if (live_flag == nullptr || std::string(live_flag) != "1") {

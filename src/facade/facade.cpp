@@ -123,6 +123,7 @@ void EvoClawFacade::initialize() {
         {"applied_count", 0}
     };
 
+    load_snapshots();
     initialized_ = true;
 }
 
@@ -525,6 +526,7 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
 void EvoClawFacade::save_state() const {
     ensure_initialized();
     router_->save_matrix(matrix_state_path(config_.log_dir));
+    save_snapshots();
 }
 
 void EvoClawFacade::trigger_evolution() {
@@ -1045,6 +1047,70 @@ bool EvoClawFacade::rollback_proposal(const std::string& proposal_id, std::strin
 
     rollback_snapshots_.erase(snap_it);
     return true;
+}
+
+void EvoClawFacade::save_snapshots() const {
+    const auto snap_path = config_.log_dir / "snapshots.json";
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& [id, snap] : rollback_snapshots_) {
+        arr.push_back({
+            {"proposal_id", id},
+            {"agent_id", snap.agent_id},
+            {"applied_at_ms", std::chrono::duration_cast<std::chrono::milliseconds>(snap.applied_at.time_since_epoch()).count()},
+            {"config_before", snap.config_before},
+            {"config_after", snap.config_after}
+        });
+    }
+    std::ofstream ofs(snap_path);
+    if (ofs) {
+        ofs << arr.dump(2);
+    }
+}
+
+void EvoClawFacade::load_snapshots() {
+    const auto snap_path = config_.log_dir / "snapshots.json";
+    if (!std::filesystem::exists(snap_path)) {
+        return;
+    }
+    std::ifstream ifs(snap_path);
+    if (!ifs) {
+        return;
+    }
+    try {
+        nlohmann::json arr = nlohmann::json::parse(ifs);
+        if (!arr.is_array()) {
+            return;
+        }
+        for (const auto& item : arr) {
+            if (!item.contains("proposal_id") || !item.contains("agent_id")) {
+                continue;
+            }
+            const auto id = item["proposal_id"].get<std::string>();
+            RollbackSnapshot snap;
+            snap.agent_id = item["agent_id"].get<std::string>();
+            const auto ms = item.value("applied_at_ms", int64_t{0});
+            snap.applied_at = Timestamp(std::chrono::milliseconds(ms));
+            snap.config_before = item.value("config_before", nlohmann::json::object());
+            snap.config_after = item.value("config_after", nlohmann::json::object());
+            rollback_snapshots_[id] = std::move(snap);
+        }
+    } catch (const std::exception&) {
+        // Ignore parse errors
+    }
+}
+
+void EvoClawFacade::clear_expired_snapshots(std::chrono::seconds max_age) {
+    const auto now = evoclaw::now();
+    std::vector<std::string> to_remove;
+    for (const auto& [id, snap] : rollback_snapshots_) {
+        const auto age_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - snap.applied_at);
+        if (age_seconds >= max_age) {
+            to_remove.push_back(id);
+        }
+    }
+    for (const auto& id : to_remove) {
+        rollback_snapshots_.erase(id);
+    }
 }
 
 nlohmann::json EvoClawFacade::list_rollback_snapshots() const {
