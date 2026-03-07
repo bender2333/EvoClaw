@@ -1186,7 +1186,78 @@ void EvoClawFacade::maybe_auto_prune_runtime_config_history() {
     if (config_.runtime_history_keep_last_per_agent == 0U) {
         return;
     }
-    clear_old_runtime_config_history(config_.runtime_history_keep_last_per_agent);
+
+    const std::size_t keep_last_per_agent = config_.runtime_history_keep_last_per_agent;
+    const std::size_t history_entries_before = runtime_config_history_.size();
+    if (history_entries_before == 0U) {
+        return;
+    }
+
+    std::unordered_map<AgentId, std::size_t> before_counts;
+    before_counts.reserve(history_entries_before);
+    for (const auto& record : runtime_config_history_) {
+        ++before_counts[record.agent_id];
+    }
+
+    clear_old_runtime_config_history(keep_last_per_agent);
+
+    const std::size_t history_entries_after = runtime_config_history_.size();
+    if (history_entries_after >= history_entries_before) {
+        return;
+    }
+
+    std::unordered_map<AgentId, std::size_t> after_counts;
+    after_counts.reserve(history_entries_after);
+    for (const auto& record : runtime_config_history_) {
+        ++after_counts[record.agent_id];
+    }
+
+    json removed_by_agent = json::array();
+    std::size_t pruned_entries = 0U;
+    std::vector<AgentId> agent_ids;
+    agent_ids.reserve(before_counts.size());
+    for (const auto& [agent_id, _] : before_counts) {
+        agent_ids.push_back(agent_id);
+    }
+    std::sort(agent_ids.begin(), agent_ids.end());
+
+    for (const auto& agent_id : agent_ids) {
+        const auto before_it = before_counts.find(agent_id);
+        const std::size_t before = before_it != before_counts.end() ? before_it->second : 0U;
+        const auto after_it = after_counts.find(agent_id);
+        const std::size_t after = after_it != after_counts.end() ? after_it->second : 0U;
+        if (before <= after) {
+            continue;
+        }
+
+        const std::size_t removed = before - after;
+        pruned_entries += removed;
+        removed_by_agent.push_back({
+            {"agent_id", agent_id},
+            {"removed_entries", removed},
+            {"history_count_before", before},
+            {"history_count_after", after}
+        });
+    }
+
+    if (pruned_entries == 0U) {
+        return;
+    }
+
+    std::ostringstream message;
+    message << "Auto-pruned runtime config history: removed " << pruned_entries
+            << " entries (keep_last_per_agent=" << keep_last_per_agent << ")";
+
+    emit_event({
+        {"event", "runtime_config_history_pruned"},
+        {"trigger", "auto"},
+        {"keep_last_per_agent", keep_last_per_agent},
+        {"history_entries_before", history_entries_before},
+        {"history_entries_after", history_entries_after},
+        {"pruned_entries", pruned_entries},
+        {"removed_by_agent", removed_by_agent},
+        {"message", message.str()}
+    });
 }
 
 nlohmann::json EvoClawFacade::get_agent_runtime_version(const AgentId& agent_id) const {

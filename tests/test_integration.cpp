@@ -4,6 +4,7 @@
 #include "agent/critic.hpp"
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdlib>
 #include <chrono>
 #include <filesystem>
@@ -836,6 +837,85 @@ TEST_F(IntegrationTest, RuntimeConfigAutoPruneGovernanceKeepsRecentEntriesAndPer
     }
 }
 
+
+TEST_F(IntegrationTest, RuntimeConfigAutoPruneEmitsAuditablePruneEvent) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.runtime_history_keep_last_per_agent = 0U;
+
+    const std::string agent_id = "executor-runtime-auto-prune-event";
+
+    const auto s0 = make_runtime_snapshot(agent_id, "executor", "event prompt v0", "1.0.0");
+    const auto s1 = make_runtime_snapshot(agent_id, "executor", "event prompt v1", "1.0.1");
+    const auto s2 = make_runtime_snapshot(agent_id, "executor", "event prompt v2", "1.0.2");
+    const auto s3 = make_runtime_snapshot(agent_id, "executor", "event prompt v3", "1.0.3");
+    const auto s4 = make_runtime_snapshot(agent_id, "executor", "event prompt v4", "1.0.4");
+
+    nlohmann::json history = nlohmann::json::array();
+    const auto push_record = [&history](const std::string& id,
+                                        const std::uint64_t version,
+                                        const nlohmann::json& before,
+                                        const nlohmann::json& after,
+                                        const std::string& changed_at) {
+        history.push_back({
+            {"agent_id", id},
+            {"version", version},
+            {"proposal_id", "proposal-auto-event-" + std::to_string(version)},
+            {"before", before},
+            {"after", after},
+            {"diff", {{"system_prompt", {{"before", before["system_prompt"]}, {"after", after["system_prompt"]}}}}},
+            {"changed_at", changed_at}
+        });
+    };
+
+    push_record(agent_id, 1U, s0, s1, "2026-03-01T13:00:00");
+    push_record(agent_id, 2U, s1, s2, "2026-03-01T13:01:00");
+    push_record(agent_id, 3U, s2, s3, "2026-03-01T13:02:00");
+    push_record(agent_id, 4U, s3, s4, "2026-03-01T13:03:00");
+
+    write_json_file(test_dir_ / "runtime_config_versions.json", {
+        {agent_id, 4U}
+    });
+    write_json_file(test_dir_ / "runtime_config_history.json", history);
+
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+    facade.register_agent(std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config(agent_id, "executor", {"execute"})));
+
+    std::vector<nlohmann::json> events;
+    facade.set_event_callback([&events](const nlohmann::json& event) {
+        events.push_back(event);
+    });
+
+    EXPECT_EQ(facade.get_agent_runtime_history(agent_id).size(), 4U);
+    EXPECT_EQ(facade.get_agent_runtime_version(agent_id)["version"].get<std::uint64_t>(), 4U);
+
+    facade.set_runtime_history_keep_last_per_agent(2U);
+
+    const auto history_after = facade.get_agent_runtime_history(agent_id);
+    ASSERT_EQ(history_after.size(), 2U);
+    EXPECT_EQ(history_after[0]["version"].get<std::uint64_t>(), 3U);
+    EXPECT_EQ(history_after[1]["version"].get<std::uint64_t>(), 4U);
+    EXPECT_EQ(facade.get_agent_runtime_version(agent_id)["version"].get<std::uint64_t>(), 4U);
+
+    const auto prune_event_it = std::find_if(events.begin(), events.end(), [](const nlohmann::json& event) {
+        return event.value("event", std::string()) == "runtime_config_history_pruned";
+    });
+    ASSERT_NE(prune_event_it, events.end());
+
+    const auto& prune_event = *prune_event_it;
+    EXPECT_EQ(prune_event.value("trigger", std::string()), "auto");
+    EXPECT_EQ(prune_event.value("keep_last_per_agent", 0U), 2U);
+    EXPECT_EQ(prune_event.value("history_entries_before", 0U), 4U);
+    EXPECT_EQ(prune_event.value("history_entries_after", 0U), 2U);
+    EXPECT_EQ(prune_event.value("pruned_entries", 0U), 2U);
+    ASSERT_TRUE(prune_event.contains("removed_by_agent"));
+    ASSERT_TRUE(prune_event["removed_by_agent"].is_array());
+    ASSERT_EQ(prune_event["removed_by_agent"].size(), 1U);
+    EXPECT_EQ(prune_event["removed_by_agent"][0]["agent_id"].get<std::string>(), agent_id);
+    EXPECT_EQ(prune_event["removed_by_agent"][0]["removed_entries"].get<std::size_t>(), 2U);
+}
 
 TEST_F(IntegrationTest, ValidatePatchSchemaRejectsUnknownFields) {
     std::string reason;

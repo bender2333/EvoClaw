@@ -1285,3 +1285,27 @@ Dashboard 增加 runtime governance 的可视化与更新入口。
 - dashboard HTML 包含 governance 标签、输入框、按钮或相关 id
 - 包含 `auto_prune_enabled` / `keep_last_per_agent` 相关文案
 - 保持既有 dashboard 与 server 测试不回归
+
+### 5.10 Governance 事件化（slice 4）
+为 runtime history 自动治理增加审计事件，进入现有事件流（SSE + /api/events）。
+
+事件目标：
+- 当 auto-prune 实际裁剪了 history 时，发出 `runtime_config_history_pruned` 事件
+- 事件包含：
+  - `trigger`（如 `auto`）
+  - `keep_last_per_agent`
+  - `history_entries_before` / `history_entries_after`
+  - `pruned_entries`
+  - `removed_by_agent`（每个 agent 的裁剪条数）
+- message 文案可直接在 event feed 中阅读，包含“谁被裁了多少条”的摘要
+
+约束：
+- 没有实际裁剪（pruned_entries=0）时不刷无意义事件
+- 不改变版本号单调性与现有 diff 语义
+- 不新增复杂事件管道，复用现有 `emit_event` / SSE
+
+### 5.11 测试要求（slice 4）
+- 启用 auto-prune 并触发裁剪后，能捕获 `runtime_config_history_pruned` 事件
+- 事件字段包含裁剪前后条数、阈值、按 agent 的裁剪统计
+- 裁剪后版本号保持不回退
+- 全量测试保持通过
