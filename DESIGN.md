@@ -1261,3 +1261,27 @@ Dashboard 接入 runtime config API，先做轻量可观测性与治理入口，
 - 当 POST 设置较小阈值时，现有 history 会立即被裁剪
 - 裁剪后持久化文件内容与返回状态一致
 - 非法 body / 非法阈值返回 `400`
+
+### 5.8 Dashboard 接 governance（slice 3）
+Dashboard 增加 runtime governance 的可视化与更新入口。
+
+展示目标：
+- 在 overview / operations 中展示：
+  - `auto_prune_enabled`
+  - `keep_last_per_agent`
+- 提供一个独立表单更新 runtime governance：
+  - 输入 `keep_last_per_agent`
+  - 调用 `POST /api/runtime-config/governance`
+  - 成功后刷新 `status`、runtime summary、当前 inspector 状态
+
+交互要求：
+- 首屏通过 `/api/status` 读取 governance 摘要，不做额外查询风暴
+- 提交 governance 更新后：
+  - 写一条成功/失败 event feed
+  - 若当前选中 agent 仍存在，自动刷新其 history 与 diff 状态
+- 当阈值为 `0` 时，UI 明确表示 auto-prune disabled
+
+### 5.9 测试要求（slice 3）
+- dashboard HTML 包含 governance 标签、输入框、按钮或相关 id
+- 包含 `auto_prune_enabled` / `keep_last_per_agent` 相关文案
+- 保持既有 dashboard 与 server 测试不回归

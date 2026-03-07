@@ -487,6 +487,14 @@ inline constexpr const char* kDashboardHtml = R"html(
             <div class="label">Runtime History Entries</div>
             <div class="value" id="stat-runtime-history-entries">0</div>
           </div>
+          <div class="stat">
+            <div class="label">Runtime Auto Prune</div>
+            <div class="value" id="stat-runtime-auto-prune">off</div>
+          </div>
+          <div class="stat">
+            <div class="label">Runtime Keep Last</div>
+            <div class="value" id="stat-runtime-keep-last">0</div>
+          </div>
         </div>
       </section>
 
@@ -521,6 +529,12 @@ inline constexpr const char* kDashboardHtml = R"html(
           <label class="ops-label" for="keep-last-per-agent">Runtime history keep_last_per_agent</label>
           <input id="keep-last-per-agent" type="number" min="0" step="1" value="1" />
           <button type="submit">Prune Runtime History</button>
+        </form>
+        <div class="ops-divider"></div>
+        <form id="runtime-governance-form">
+          <label class="ops-label" for="runtime-governance-keep-last">Runtime governance keep_last_per_agent</label>
+          <input id="runtime-governance-keep-last" type="number" min="0" step="1" value="0" />
+          <button type="submit">Update Runtime Governance</button>
         </form>
       </section>
 
@@ -590,6 +604,8 @@ inline constexpr const char* kDashboardHtml = R"html(
       statIntegrity: document.getElementById('stat-integrity'),
       statRuntimeTrackedAgents: document.getElementById('stat-runtime-tracked-agents'),
       statRuntimeHistoryEntries: document.getElementById('stat-runtime-history-entries'),
+      statRuntimeAutoPrune: document.getElementById('stat-runtime-auto-prune'),
+      statRuntimeKeepLast: document.getElementById('stat-runtime-keep-last'),
       integrityFooter: document.getElementById('integrity-footer'),
       eventFeed: document.getElementById('event-feed'),
       evolutionHistory: document.getElementById('evolution-history'),
@@ -600,6 +616,8 @@ inline constexpr const char* kDashboardHtml = R"html(
       evolveBtn: document.getElementById('evolve-btn'),
       runtimePruneForm: document.getElementById('runtime-prune-form'),
       keepLastPerAgent: document.getElementById('keep-last-per-agent'),
+      runtimeGovernanceForm: document.getElementById('runtime-governance-form'),
+      runtimeGovernanceKeepLast: document.getElementById('runtime-governance-keep-last'),
       runtimeInspectorSelected: document.getElementById('runtime-inspector-selected'),
       runtimeHistoryList: document.getElementById('runtime-history-list'),
       runtimeHistoryEmpty: document.getElementById('runtime-history-empty'),
@@ -1113,6 +1131,11 @@ ${indentLines(formatJsonValue(change), '  ')}`);
       const runtimeConfig = status.runtime_config || {};
       refs.statRuntimeTrackedAgents.textContent = runtimeConfig.tracked_agents || 0;
       refs.statRuntimeHistoryEntries.textContent = runtimeConfig.history_entries || 0;
+      const runtimeGovernance = runtimeConfig.governance || {};
+      const autoPruneEnabled = Boolean(runtimeGovernance.auto_prune_enabled);
+      refs.statRuntimeAutoPrune.textContent = autoPruneEnabled ? 'on' : 'off';
+      refs.statRuntimeKeepLast.textContent = runtimeGovernance.keep_last_per_agent || 0;
+      refs.runtimeGovernanceKeepLast.value = String(runtimeGovernance.keep_last_per_agent || 0);
       state.runtimeConfigByAgent = Object.create(null);
       for (const item of runtimeConfig.agents || []) {
         if (item && item.agent_id) {
@@ -1280,6 +1303,54 @@ ${indentLines(formatJsonValue(change), '  ')}`);
         appendEvent({
           event: 'runtime_config_prune_failed',
           message: `Runtime config prune failed: ${err.message}`,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    refs.runtimeGovernanceForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const keepLastPerAgent = Number.parseInt(refs.runtimeGovernanceKeepLast.value, 10);
+      if (!Number.isInteger(keepLastPerAgent) || keepLastPerAgent < 0) {
+        appendEvent({
+          event: 'runtime_governance_update_failed',
+          message: 'Runtime governance update failed: keep_last_per_agent must be a non-negative integer',
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+
+      try {
+        const payload = await getJson('/api/runtime-config/governance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            keep_last_per_agent: keepLastPerAgent
+          })
+        });
+
+        state.runtimeInspector.historyByAgent = Object.create(null);
+        state.runtimeInspector.historyLoadingByAgent = Object.create(null);
+        state.runtimeInspector.historyErrorByAgent = Object.create(null);
+
+        await Promise.all([refreshStatus(), refreshAgents()]);
+        if (state.runtimeInspector.selectedAgentId) {
+          await ensureRuntimeHistory(state.runtimeInspector.selectedAgentId, {
+            forceReload: true,
+            alignCompareToLatest: true
+          });
+        }
+
+        const enabled = payload && payload.governance && payload.governance.auto_prune_enabled;
+        appendEvent({
+          event: 'runtime_governance_updated',
+          message: `Runtime governance updated (auto_prune=${enabled ? 'on' : 'off'}, keep_last_per_agent=${keepLastPerAgent})`,
+          timestamp: new Date().toISOString()
+        });
+      } catch (err) {
+        appendEvent({
+          event: 'runtime_governance_update_failed',
+          message: `Runtime governance update failed: ${err.message}`,
           timestamp: new Date().toISOString()
         });
       }

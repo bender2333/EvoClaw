@@ -459,6 +459,10 @@ TEST(DashboardHtmlTest, IncludesRuntimeConfigSummaryPruneAndInspectorControls) {
     const std::string html = evoclaw::server::dashboard::kDashboardHtml;
     EXPECT_NE(html.find("Runtime Tracked Agents"), std::string::npos);
     EXPECT_NE(html.find("Runtime History Entries"), std::string::npos);
+    EXPECT_NE(html.find("Runtime Auto Prune"), std::string::npos);
+    EXPECT_NE(html.find("Runtime Keep Last"), std::string::npos);
+    EXPECT_NE(html.find("stat-runtime-auto-prune"), std::string::npos);
+    EXPECT_NE(html.find("stat-runtime-keep-last"), std::string::npos);
     EXPECT_NE(html.find("runtime_version"), std::string::npos);
     EXPECT_NE(html.find("runtime_history_count"), std::string::npos);
     EXPECT_NE(html.find("runtime_latest_changed_at"), std::string::npos);
@@ -484,6 +488,11 @@ TEST(DashboardHtmlTest, IncludesRuntimeConfigSummaryPruneAndInspectorControls) {
     EXPECT_NE(html.find("missing or pruned"), std::string::npos);
     EXPECT_NE(html.find("contract.version"), std::string::npos);
     EXPECT_NE(html.find("contract.success_rate_threshold"), std::string::npos);
+    EXPECT_NE(html.find("runtime-governance-form"), std::string::npos);
+    EXPECT_NE(html.find("runtime-governance-keep-last"), std::string::npos);
+    EXPECT_NE(html.find("Update Runtime Governance"), std::string::npos);
+    EXPECT_NE(html.find("runtime_governance_updated"), std::string::npos);
+    EXPECT_NE(html.find("/api/runtime-config/governance"), std::string::npos);
     EXPECT_NE(html.find("/api/runtime-config/history?"), std::string::npos);
     EXPECT_NE(html.find("/api/runtime-config/diff?"), std::string::npos);
     EXPECT_NE(html.find("keep_last_per_agent"), std::string::npos);
