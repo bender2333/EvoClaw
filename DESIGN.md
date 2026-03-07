@@ -991,8 +991,34 @@ struct RuntimeConfigVersionRecord {
 
 初始化时自动恢复；`save_state()` 时自动落盘。
 
-### 4.8 测试要求
+### 4.8 Status / 可观测性增强
+`get_status()` 增加轻量 runtime config 摘要：
+
+```json
+{
+  "runtime_config": {
+    "tracked_agents": 2,
+    "history_entries": 5,
+    "agents": [
+      {
+        "agent_id": "executor-1",
+        "current_version": 2,
+        "history_count": 2,
+        "latest_changed_at": "2026-03-07T13:48:00"
+      }
+    ]
+  }
+}
+```
+
+约束：
+- `status` 只放**摘要**，不内嵌完整 history / diff，避免 payload 过大
+- `latest_changed_at` 取该 agent 最新一条 version record 的 `changed_at`
+- 没有 runtime history 的 agent 仍应出现在摘要中，`current_version=0`，`history_count=0`
+
+### 4.9 测试要求
 - patch 成功后 version 递增
 - history 能反映 before/after/diff
 - rollback 产生新版本记录
 - 持久化后重启可恢复版本与历史
+- `get_status()` 能返回 runtime config 摘要，并正确反映 version / history_count

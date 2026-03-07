@@ -315,9 +315,35 @@ TEST_F(IntegrationTest, RuntimeConfigVersioningTracksPatchRollbackAndDiff) {
         make_agent_config(agent_id, "executor", {"execute"}));
     facade.register_agent(executor);
 
+    const auto summary_for = [&agent_id](const nlohmann::json& runtime_config) -> nlohmann::json {
+        if (!runtime_config.contains("agents") || !runtime_config["agents"].is_array()) {
+            return nlohmann::json();
+        }
+        for (const auto& item : runtime_config["agents"]) {
+            if (item.value("agent_id", std::string()) == agent_id) {
+                return item;
+            }
+        }
+        return nlohmann::json();
+    };
+
     const auto version0 = facade.get_agent_runtime_version(agent_id);
     ASSERT_TRUE(version0.contains("version"));
     EXPECT_EQ(version0["version"].get<std::uint64_t>(), 0U);
+
+    const auto status0 = facade.get_status();
+    ASSERT_TRUE(status0.contains("runtime_config"));
+    const auto runtime0 = status0["runtime_config"];
+    EXPECT_EQ(runtime0["tracked_agents"].get<std::size_t>(), 1U);
+    EXPECT_EQ(runtime0["history_entries"].get<std::size_t>(), 0U);
+    const auto runtime0_agent = summary_for(runtime0);
+    ASSERT_TRUE(runtime0_agent.is_object());
+    EXPECT_EQ(runtime0_agent["current_version"].get<std::uint64_t>(), 0U);
+    EXPECT_EQ(runtime0_agent["history_count"].get<std::size_t>(), 0U);
+    EXPECT_TRUE(runtime0_agent["latest_changed_at"].is_null());
+    EXPECT_FALSE(runtime0_agent.contains("before"));
+    EXPECT_FALSE(runtime0_agent.contains("after"));
+    EXPECT_FALSE(runtime0_agent.contains("diff"));
 
     for (int i = 0; i < 10; ++i) {
         evoclaw::agent::Task task;
@@ -333,6 +359,19 @@ TEST_F(IntegrationTest, RuntimeConfigVersioningTracksPatchRollbackAndDiff) {
     facade.trigger_evolution();
 
     const auto status = facade.get_status();
+    ASSERT_TRUE(status.contains("runtime_config"));
+    const auto runtime1 = status["runtime_config"];
+    EXPECT_EQ(runtime1["tracked_agents"].get<std::size_t>(), 1U);
+    EXPECT_EQ(runtime1["history_entries"].get<std::size_t>(), 1U);
+    const auto runtime1_agent = summary_for(runtime1);
+    ASSERT_TRUE(runtime1_agent.is_object());
+    EXPECT_EQ(runtime1_agent["current_version"].get<std::uint64_t>(), 1U);
+    EXPECT_EQ(runtime1_agent["history_count"].get<std::size_t>(), 1U);
+    EXPECT_TRUE(runtime1_agent["latest_changed_at"].is_string());
+    EXPECT_FALSE(runtime1_agent.contains("before"));
+    EXPECT_FALSE(runtime1_agent.contains("after"));
+    EXPECT_FALSE(runtime1_agent.contains("diff"));
+
     const auto cycle = status["evolution"].value("last_cycle", nlohmann::json::object());
     ASSERT_TRUE(cycle.contains("proposals"));
 
@@ -369,6 +408,17 @@ TEST_F(IntegrationTest, RuntimeConfigVersioningTracksPatchRollbackAndDiff) {
     const auto version2 = facade.get_agent_runtime_version(agent_id);
     ASSERT_TRUE(version2.contains("version"));
     EXPECT_EQ(version2["version"].get<std::uint64_t>(), 2U);
+
+    const auto status2 = facade.get_status();
+    ASSERT_TRUE(status2.contains("runtime_config"));
+    const auto runtime2 = status2["runtime_config"];
+    EXPECT_EQ(runtime2["tracked_agents"].get<std::size_t>(), 1U);
+    EXPECT_EQ(runtime2["history_entries"].get<std::size_t>(), 2U);
+    const auto runtime2_agent = summary_for(runtime2);
+    ASSERT_TRUE(runtime2_agent.is_object());
+    EXPECT_EQ(runtime2_agent["current_version"].get<std::uint64_t>(), 2U);
+    EXPECT_EQ(runtime2_agent["history_count"].get<std::size_t>(), 2U);
+    EXPECT_TRUE(runtime2_agent["latest_changed_at"].is_string());
 
     const auto history2 = facade.get_agent_runtime_history(agent_id);
     ASSERT_TRUE(history2.is_array());

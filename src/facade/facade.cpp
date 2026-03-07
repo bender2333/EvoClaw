@@ -586,6 +586,56 @@ memory::OrgLog::TimeRangeStats EvoClawFacade::get_log_stats(Timestamp start, Tim
 
 nlohmann::json EvoClawFacade::get_status() const {
     const std::size_t org_entries = (initialized_ && org_log_) ? org_log_->all_entries().size() : 0U;
+    std::unordered_map<AgentId, std::size_t> runtime_history_counts;
+    std::unordered_map<AgentId, Timestamp> runtime_latest_changed_at;
+    for (const auto& record : runtime_config_history_) {
+        ++runtime_history_counts[record.agent_id];
+        const auto latest_it = runtime_latest_changed_at.find(record.agent_id);
+        if (latest_it == runtime_latest_changed_at.end() || latest_it->second < record.changed_at) {
+            runtime_latest_changed_at[record.agent_id] = record.changed_at;
+        }
+    }
+
+    std::vector<AgentId> registered_agent_ids;
+    registered_agent_ids.reserve(agents_.size());
+    for (const auto& [agent_id, agent_ptr] : agents_) {
+        if (agent_ptr) {
+            registered_agent_ids.push_back(agent_id);
+        }
+    }
+    std::sort(registered_agent_ids.begin(), registered_agent_ids.end());
+
+    json runtime_agent_summaries = json::array();
+    for (const auto& agent_id : registered_agent_ids) {
+        const auto version_it = runtime_config_versions_.find(agent_id);
+        const std::uint64_t current_version = version_it != runtime_config_versions_.end()
+                                                  ? version_it->second
+                                                  : 0U;
+
+        const auto history_count_it = runtime_history_counts.find(agent_id);
+        const std::size_t history_count = history_count_it != runtime_history_counts.end()
+                                              ? history_count_it->second
+                                              : 0U;
+
+        json latest_changed_at = nullptr;
+        if (const auto latest_it = runtime_latest_changed_at.find(agent_id);
+            latest_it != runtime_latest_changed_at.end()) {
+            latest_changed_at = timestamp_to_string(latest_it->second);
+        }
+
+        runtime_agent_summaries.push_back({
+            {"agent_id", agent_id},
+            {"current_version", current_version},
+            {"history_count", history_count},
+            {"latest_changed_at", latest_changed_at}
+        });
+    }
+
+    const json runtime_config_summary = {
+        {"tracked_agents", runtime_agent_summaries.size()},
+        {"history_entries", runtime_config_history_.size()},
+        {"agents", runtime_agent_summaries}
+    };
 
     return {
         {"initialized", initialized_},
@@ -606,6 +656,7 @@ nlohmann::json EvoClawFacade::get_status() const {
         {"org_log_entries", org_entries},
         {"event_log_integrity", (event_log_ ? event_log_->verify_integrity() : true)},
         {"evolution", {{"last_cycle", last_evolution_report_}}},
+        {"runtime_config", runtime_config_summary},
         {"rollback_snapshots", list_rollback_snapshots()},
         {"zones", get_zone_status()},
         {"patterns", get_pattern_status()},
