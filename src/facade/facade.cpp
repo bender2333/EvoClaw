@@ -124,6 +124,7 @@ void EvoClawFacade::initialize() {
     };
 
     load_snapshots();
+    load_evolution_history();
     initialized_ = true;
 }
 
@@ -527,6 +528,7 @@ void EvoClawFacade::save_state() const {
     ensure_initialized();
     router_->save_matrix(matrix_state_path(config_.log_dir));
     save_snapshots();
+    save_evolution_history();
 }
 
 void EvoClawFacade::trigger_evolution() {
@@ -923,7 +925,7 @@ void EvoClawFacade::run_evolution_cycle() {
     last_evolution_report_ = std::move(report);
     evolution_history_.push_back(last_evolution_report_);
     if (evolution_history_.size() > 100U) {
-        evolution_history_.erase(evolution_history_.begin());
+        evolution_history_.erase(evolution_history_.begin(), evolution_history_.begin() + (evolution_history_.size() - 100U));
     }
 
     emit_event({
@@ -1101,6 +1103,54 @@ void EvoClawFacade::load_snapshots() {
         }
     } catch (const std::exception&) {
         // Ignore parse errors
+    }
+}
+
+void EvoClawFacade::save_evolution_history() const {
+    const auto history_path = config_.log_dir / "evolution_history.json";
+    std::ofstream ofs(history_path);
+    if (ofs) {
+        ofs << nlohmann::json(evolution_history_).dump(2);
+    }
+}
+
+void EvoClawFacade::load_evolution_history() {
+    const auto history_path = config_.log_dir / "evolution_history.json";
+    if (!std::filesystem::exists(history_path)) {
+        return;
+    }
+    std::ifstream ifs(history_path);
+    if (!ifs) {
+        return;
+    }
+    try {
+        auto parsed = nlohmann::json::parse(ifs);
+        if (!parsed.is_array()) {
+            return;
+        }
+        evolution_history_.clear();
+        for (const auto& item : parsed) {
+            if (item.is_object()) {
+                evolution_history_.push_back(item);
+            }
+        }
+        if (!evolution_history_.empty()) {
+            last_evolution_report_ = evolution_history_.back();
+        }
+    } catch (const std::exception&) {
+        // ignore parse errors
+    }
+}
+
+void EvoClawFacade::clear_old_evolution_history(std::size_t keep_last) {
+    if (keep_last == 0U) {
+        evolution_history_.clear();
+        return;
+    }
+    if (evolution_history_.size() > keep_last) {
+        evolution_history_.erase(
+            evolution_history_.begin(),
+            evolution_history_.begin() + (evolution_history_.size() - keep_last));
     }
 }
 

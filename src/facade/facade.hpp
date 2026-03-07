@@ -69,6 +69,9 @@ public:
     void save_snapshots() const;
     void load_snapshots();
     void clear_expired_snapshots(std::chrono::seconds max_age);
+    void save_evolution_history() const;
+    void load_evolution_history();
+    void clear_old_evolution_history(std::size_t keep_last);
     [[nodiscard]] bool verify_event_log() const;
 
 private:

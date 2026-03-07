@@ -492,6 +492,95 @@ TEST_F(IntegrationTest, AgentEvolutionStatsSummarizeHistory) {
     EXPECT_GE(stats["average_improvement"].get<double>(), 0.0);
 }
 
+
+TEST_F(IntegrationTest, EvolutionHistoryPersistenceRoundTrip) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 3;
+    config.evolver_config.consecutive_failures = 100;
+
+    {
+        evoclaw::facade::EvoClawFacade facade(config);
+        facade.initialize();
+
+        auto executor = std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config("executor-history", "executor", {"execute"}));
+        facade.register_agent(executor);
+
+        for (int i = 0; i < 10; ++i) {
+            evoclaw::agent::Task task;
+            task.id = "history-kpi-" + std::to_string(i);
+            task.description = "score task";
+            task.type = evoclaw::TaskType::ROUTE;
+            task.context["intent"] = "execute";
+            task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+            task.context["score"] = (i < 6) ? 0.9 : 0.8;
+            (void)facade.submit_task(task);
+        }
+
+        facade.trigger_evolution();
+        const auto history_before = facade.get_evolution_history();
+        ASSERT_FALSE(history_before.empty());
+        facade.save_state();
+    }
+
+    EXPECT_TRUE(std::filesystem::exists(test_dir_ / "evolution_history.json"));
+
+    {
+        evoclaw::facade::EvoClawFacade facade2(config);
+        facade2.initialize();
+        const auto history_after = facade2.get_evolution_history();
+        ASSERT_FALSE(history_after.empty());
+        EXPECT_TRUE(history_after.back().contains("proposals"));
+
+        const auto status = facade2.get_status();
+        ASSERT_TRUE(status.contains("evolution"));
+        EXPECT_EQ(status["evolution"]["last_cycle"], history_after.back());
+    }
+}
+
+TEST_F(IntegrationTest, ClearOldEvolutionHistoryKeepsRecentEntries) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 3;
+    config.evolver_config.consecutive_failures = 100;
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+
+    auto executor = std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config("executor-history-prune", "executor", {"execute"}));
+    facade.register_agent(executor);
+
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        for (int i = 0; i < 10; ++i) {
+            evoclaw::agent::Task task;
+            task.id = "history-prune-" + std::to_string(cycle) + "-" + std::to_string(i);
+            task.description = "score task";
+            task.type = evoclaw::TaskType::ROUTE;
+            task.context["intent"] = "execute";
+            task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+            task.context["score"] = (i < 6) ? 0.9 : 0.8;
+            (void)facade.submit_task(task);
+        }
+        facade.trigger_evolution();
+    }
+
+    const auto before = facade.get_evolution_history();
+    ASSERT_GE(before.size(), 3U);
+
+    facade.clear_old_evolution_history(2);
+    const auto after = facade.get_evolution_history();
+    EXPECT_EQ(after.size(), 2U);
+    EXPECT_EQ(after[0], before[before.size() - 2]);
+    EXPECT_EQ(after[1], before[before.size() - 1]);
+}
+
 TEST(IntegrationLiveTest, ExecutePipelineWithBailianWhenEnabled) {
     const char* live_flag = std::getenv("EVOCLAW_LIVE_TEST");
     if (live_flag == nullptr || std::string(live_flag) != "1") {
