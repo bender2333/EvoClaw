@@ -918,3 +918,81 @@ TEST(IntegrationTest, FullEvolutionCycle) {
 ---
 
 *设计先行，代码后行。*
+
+
+## 4. P9 设计：Runtime Config 版本化与 Diff 审计
+
+### 4.1 目标
+在现有 runtime patch / snapshot / rollback 基础上，引入**版本化配置历史**与**结构化 diff 审计**，解决以下问题：
+
+1. 当前 snapshot 为全量快照，不利于长期审计
+2. proposal 应用后只能看到 before/after，不能直接查询“改了哪些字段”
+3. 缺少连续版本号，难以表达 agent runtime config 的演进轨迹
+
+### 4.2 设计原则
+- **版本单调递增**：每个 agent 独立维护 runtime config version
+- **diff 优先**：持久化时记录 before/after 与字段级 diff
+- **兼容现有 snapshot 机制**：rollback 仍然基于快照恢复，不破坏现有路径
+- **最小侵入**：先做 facade/agent 级审计，不改 Evolver 协议结构
+
+### 4.3 新增对象
+
+```cpp
+struct RuntimeConfigVersionRecord {
+    AgentId agent_id;
+    std::uint64_t version;
+    std::string proposal_id;          // 可为空，表示手工 patch
+    nlohmann::json before;
+    nlohmann::json after;
+    nlohmann::json diff;
+    Timestamp changed_at;
+};
+```
+
+### 4.4 diff 语义
+`diff` 使用扁平字段映射：
+
+```json
+{
+  "temperature": { "before": 0.3, "after": 0.4 },
+  "success_rate_threshold": { "before": 0.75, "after": 0.82 },
+  "system_prompt": { "before": "...", "after": "..." }
+}
+```
+
+规则：
+- 仅记录发生变化的字段
+- 数组字段整体替换，不做 element-level diff
+- 不支持任意 JSON patch RFC，保持审计可读性优先
+
+### 4.5 Facade 责任
+新增 facade 内部状态：
+- `runtime_config_versions_[agent_id] -> current_version`
+- `runtime_config_history_ -> vector<RuntimeConfigVersionRecord>`
+
+新增接口：
+- `get_agent_runtime_version(agent_id)`
+- `get_agent_runtime_history(agent_id)`
+- `get_agent_runtime_diff(agent_id, from_version, to_version)`
+
+### 4.6 生命周期
+- patch 应用成功后：
+  1. 读取 before/after
+  2. 计算 diff
+  3. 当前 agent version += 1
+  4. 追加 RuntimeConfigVersionRecord
+- rollback 成功后：
+  - 同样记作一次新版本，而不是“删除历史”
+
+### 4.7 持久化
+新增文件：
+- `log_dir/runtime_config_history.json`
+- `log_dir/runtime_config_versions.json`
+
+初始化时自动恢复；`save_state()` 时自动落盘。
+
+### 4.8 测试要求
+- patch 成功后 version 递增
+- history 能反映 before/after/diff
+- rollback 产生新版本记录
+- 持久化后重启可恢复版本与历史
