@@ -41,6 +41,7 @@ public:
         router::RoutingConfig router_config;
         evolution::Evolver::Config evolver_config;
         int global_token_limit = 0;
+        std::size_t runtime_history_keep_last_per_agent = 0;
     };
 
     struct RuntimeConfigVersionRecord {
@@ -137,6 +138,7 @@ private:
                                        const std::string& proposal_id,
                                        const nlohmann::json& before,
                                        const nlohmann::json& after);
+    void maybe_auto_prune_runtime_config_history();
     void emit_event(nlohmann::json event);
     void run_evolution_cycle();
     void ensure_initialized() const;

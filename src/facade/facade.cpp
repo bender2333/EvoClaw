@@ -561,6 +561,7 @@ agent::TaskResult EvoClawFacade::submit_task(const agent::Task& task) {
 
 void EvoClawFacade::save_state() const {
     ensure_initialized();
+    const_cast<EvoClawFacade*>(this)->maybe_auto_prune_runtime_config_history();
     router_->save_matrix(matrix_state_path(config_.log_dir));
     save_snapshots();
     save_evolution_history();
@@ -634,6 +635,10 @@ nlohmann::json EvoClawFacade::get_status() const {
     const json runtime_config_summary = {
         {"tracked_agents", runtime_agent_summaries.size()},
         {"history_entries", runtime_config_history_.size()},
+        {"governance", {
+            {"auto_prune_enabled", config_.runtime_history_keep_last_per_agent > 0U},
+            {"keep_last_per_agent", config_.runtime_history_keep_last_per_agent}
+        }},
         {"agents", runtime_agent_summaries}
     };
 
@@ -1174,6 +1179,14 @@ void EvoClawFacade::record_runtime_config_version(const AgentId& agent_id,
         .diff = compute_runtime_config_diff(before, after),
         .changed_at = evoclaw::now()
     });
+    maybe_auto_prune_runtime_config_history();
+}
+
+void EvoClawFacade::maybe_auto_prune_runtime_config_history() {
+    if (config_.runtime_history_keep_last_per_agent == 0U) {
+        return;
+    }
+    clear_old_runtime_config_history(config_.runtime_history_keep_last_per_agent);
 }
 
 nlohmann::json EvoClawFacade::get_agent_runtime_version(const AgentId& agent_id) const {
@@ -1567,6 +1580,7 @@ void EvoClawFacade::load_runtime_config_history() {
             record.changed_at = *changed_at;
             runtime_config_history_.push_back(std::move(record));
         }
+        maybe_auto_prune_runtime_config_history();
     } catch (const std::exception&) {
         // ignore parse errors
     }

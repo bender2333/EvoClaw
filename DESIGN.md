@@ -1190,3 +1190,50 @@ Dashboard 接入 runtime config API，先做轻量可观测性与治理入口，
 - dashboard HTML 包含结构化 diff 区域或样式标识
 - 包含 before/after 展示文案或元素 id/class
 - 全量测试保持通过
+
+## 5. P11 Runtime Governance 自动化
+
+### 5.1 目标
+在已有 runtime version/history/diff/prune 能力之上，增加**自动治理**，避免长期运行时 history 无限制增长。
+
+### 5.2 最小实现（slice 1）
+新增 facade 配置项：
+- `runtime_history_keep_last_per_agent`（`std::size_t`，默认 `0`）
+
+语义：
+- `0` = 不自动裁剪
+- `>0` = 每个 agent 最多保留最近 N 条 runtime history
+
+### 5.3 自动治理触发点
+自动治理在以下场景触发：
+1. 成功记录新的 runtime version 后
+2. `save_state()` 落盘前兜底执行一次
+3. `load_runtime_config_history()` / 初始化恢复后，如果配置启用自动治理，可在内存中立即收敛到阈值
+
+约束：
+- **不回退 / 不重编号** `runtime_config_versions_`
+- 自动治理仅影响 `runtime_config_history_`
+- `get_agent_runtime_diff()` 若命中被自动裁剪掉的版本，仍返回 `version_not_found`
+
+### 5.4 Status 暴露
+`get_status().runtime_config` 新增 `governance` 摘要，例如：
+
+```json
+{
+  "runtime_config": {
+    "tracked_agents": 2,
+    "history_entries": 4,
+    "governance": {
+      "auto_prune_enabled": true,
+      "keep_last_per_agent": 2
+    }
+  }
+}
+```
+
+### 5.5 测试要求
+- 配置阈值后，连续写入多个 runtime version 会自动裁剪到最近 N 条
+- `current_version` 仍保持单调递增，不因自动裁剪而回退
+- 自动裁剪后持久化重启，history 仍符合阈值
+- `get_status()` 正确反映 governance 配置
+- 对已被自动裁剪的旧版本做 diff 查询返回 `version_not_found`
