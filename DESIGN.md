@@ -1016,9 +1016,34 @@ struct RuntimeConfigVersionRecord {
 - `latest_changed_at` 取该 agent 最新一条 version record 的 `changed_at`
 - 没有 runtime history 的 agent 仍应出现在摘要中，`current_version=0`，`history_count=0`
 
-### 4.9 测试要求
+### 4.9 History 治理 / 裁剪
+新增 facade 接口：
+- `clear_old_runtime_config_history(std::size_t keep_last_per_agent)`
+
+语义：
+- 按 **agent 维度** 分组裁剪
+- 每个 agent 仅保留最近 `keep_last_per_agent` 条 `RuntimeConfigVersionRecord`
+- **不重写 / 不重编号** `current_version`
+  - 例如 agent 当前 version 已到 12，裁剪后即使只剩最近 3 条，当前 version 仍为 12
+- `runtime_config_versions_` 保留当前最新 version，作为单调递增计数器
+- `get_status().runtime_config.history_entries` 与 `history_count` 必须反映裁剪后结果
+
+查询一致性约束：
+- `get_agent_runtime_history(agent_id)` 返回裁剪后的剩余历史
+- `get_agent_runtime_diff(agent_id, from_version, to_version)`：
+  - 若 `from_version` 或 `to_version` 所需 snapshot 已被裁剪掉，返回 `version_not_found`
+  - 不尝试从外部重建被裁剪历史
+
+持久化语义：
+- 裁剪后调用 `save_state()`，落盘文件只保存裁剪后的 history
+- `runtime_config_versions.json` 仍保留最新 version 计数，不回退
+
+### 4.10 测试要求
 - patch 成功后 version 递增
 - history 能反映 before/after/diff
 - rollback 产生新版本记录
 - 持久化后重启可恢复版本与历史
 - `get_status()` 能返回 runtime config 摘要，并正确反映 version / history_count
+- 裁剪后每个 agent 只保留最近 N 条 history
+- 裁剪后 current_version 不回退
+- 裁剪后对已丢失版本做 diff 查询返回 `version_not_found`

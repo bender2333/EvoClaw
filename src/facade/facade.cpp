@@ -1124,22 +1124,29 @@ nlohmann::json EvoClawFacade::compute_runtime_config_diff(const nlohmann::json& 
 std::optional<nlohmann::json> EvoClawFacade::get_runtime_snapshot_for_version(const AgentId& agent_id,
                                                                                const std::uint64_t version) const {
     if (version == 0) {
-        const RuntimeConfigVersionRecord* first_record = nullptr;
+        const RuntimeConfigVersionRecord* baseline_record = nullptr;
         for (const auto& record : runtime_config_history_) {
             if (record.agent_id != agent_id) {
                 continue;
             }
-            if (first_record == nullptr || record.version < first_record->version) {
-                first_record = &record;
+            if (record.version != 1U) {
+                continue;
+            }
+            if (baseline_record == nullptr || record.changed_at < baseline_record->changed_at) {
+                baseline_record = &record;
             }
         }
-        if (first_record != nullptr) {
-            return first_record->before;
+        if (baseline_record != nullptr) {
+            return baseline_record->before;
         }
 
-        const auto agent_it = agents_.find(agent_id);
-        if (agent_it != agents_.end() && agent_it->second) {
-            return agent_it->second->runtime_config();
+        const auto version_it = runtime_config_versions_.find(agent_id);
+        const std::uint64_t current_version = version_it != runtime_config_versions_.end() ? version_it->second : 0U;
+        if (current_version == 0U) {
+            const auto agent_it = agents_.find(agent_id);
+            if (agent_it != agents_.end() && agent_it->second) {
+                return agent_it->second->runtime_config();
+            }
         }
         return std::nullopt;
     }
@@ -1575,6 +1582,29 @@ void EvoClawFacade::clear_old_evolution_history(std::size_t keep_last) {
             evolution_history_.begin(),
             evolution_history_.begin() + (evolution_history_.size() - keep_last));
     }
+}
+
+void EvoClawFacade::clear_old_runtime_config_history(std::size_t keep_last_per_agent) {
+    if (keep_last_per_agent == 0U) {
+        runtime_config_history_.clear();
+        return;
+    }
+
+    std::unordered_map<AgentId, std::size_t> kept_per_agent;
+    std::vector<RuntimeConfigVersionRecord> retained_reversed;
+    retained_reversed.reserve(runtime_config_history_.size());
+
+    for (auto it = runtime_config_history_.rbegin(); it != runtime_config_history_.rend(); ++it) {
+        auto& kept = kept_per_agent[it->agent_id];
+        if (kept >= keep_last_per_agent) {
+            continue;
+        }
+        retained_reversed.push_back(*it);
+        ++kept;
+    }
+
+    std::reverse(retained_reversed.begin(), retained_reversed.end());
+    runtime_config_history_ = std::move(retained_reversed);
 }
 
 void EvoClawFacade::clear_expired_snapshots(std::chrono::seconds max_age) {

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace {
@@ -27,6 +28,32 @@ evoclaw::agent::AgentConfig make_agent_config(const std::string& id,
     config.contract.airbag.reversible = true;
     config.contract.cost_model = {{"tokens", 100.0}};
     return config;
+}
+
+nlohmann::json make_runtime_snapshot(const std::string& id,
+                                     const std::string& role,
+                                     const std::string& prompt,
+                                     const std::string& module_version) {
+    return {
+        {"id", id},
+        {"role", role},
+        {"system_prompt", prompt},
+        {"temperature", 0.7},
+        {"contract", {
+            {"module_id", id},
+            {"version", module_version},
+            {"success_rate_threshold", 0.75},
+            {"estimated_cost_token", 100.0},
+            {"intent_tags", nlohmann::json::array({"execute"})},
+            {"required_tools", nlohmann::json::array()}
+        }}
+    };
+}
+
+void write_json_file(const std::filesystem::path& path, const nlohmann::json& data) {
+    std::ofstream ofs(path);
+    ASSERT_TRUE(ofs.is_open());
+    ofs << data.dump(2);
 }
 
 class IntegrationTest : public ::testing::Test {
@@ -513,6 +540,210 @@ TEST_F(IntegrationTest, RuntimeConfigVersionHistoryPersistenceRoundTrip) {
         ASSERT_TRUE(history_after.is_array());
         ASSERT_EQ(history_after.size(), history_before.size());
         EXPECT_EQ(history_after, history_before);
+    }
+}
+
+TEST_F(IntegrationTest, RuntimeConfigHistoryPruneKeepsRecentPerAgentAndDiffFailsForPrunedVersions) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+
+    const std::string agent_a = "executor-runtime-prune-a";
+    const std::string agent_b = "executor-runtime-prune-b";
+
+    const auto a0 = make_runtime_snapshot(agent_a, "executor", "executor A prompt v0", "1.0.0");
+    const auto a1 = make_runtime_snapshot(agent_a, "executor", "executor A prompt v1", "1.0.1");
+    const auto a2 = make_runtime_snapshot(agent_a, "executor", "executor A prompt v2", "1.0.2");
+    const auto a3 = make_runtime_snapshot(agent_a, "executor", "executor A prompt v3", "1.0.3");
+    const auto a4 = make_runtime_snapshot(agent_a, "executor", "executor A prompt v4", "1.0.4");
+
+    const auto b0 = make_runtime_snapshot(agent_b, "executor", "executor B prompt v0", "1.0.0");
+    const auto b1 = make_runtime_snapshot(agent_b, "executor", "executor B prompt v1", "1.0.1");
+    const auto b2 = make_runtime_snapshot(agent_b, "executor", "executor B prompt v2", "1.0.2");
+
+    nlohmann::json history = nlohmann::json::array();
+    const auto push_record = [&history](const std::string& agent_id,
+                                        const std::uint64_t version,
+                                        const std::string& proposal_id,
+                                        const nlohmann::json& before,
+                                        const nlohmann::json& after,
+                                        const std::string& changed_at) {
+        history.push_back({
+            {"agent_id", agent_id},
+            {"version", version},
+            {"proposal_id", proposal_id},
+            {"before", before},
+            {"after", after},
+            {"diff", {{"system_prompt", {{"before", before["system_prompt"]}, {"after", after["system_prompt"]}}}}},
+            {"changed_at", changed_at}
+        });
+    };
+
+    push_record(agent_a, 1U, "proposal-a-1", a0, a1, "2026-03-01T10:00:00");
+    push_record(agent_b, 1U, "proposal-b-1", b0, b1, "2026-03-01T10:01:00");
+    push_record(agent_a, 2U, "proposal-a-2", a1, a2, "2026-03-01T10:02:00");
+    push_record(agent_b, 2U, "proposal-b-2", b1, b2, "2026-03-01T10:03:00");
+    push_record(agent_a, 3U, "proposal-a-3", a2, a3, "2026-03-01T10:04:00");
+    push_record(agent_a, 4U, "proposal-a-4", a3, a4, "2026-03-01T10:05:00");
+
+    write_json_file(test_dir_ / "runtime_config_versions.json", {
+        {agent_a, 4U},
+        {agent_b, 2U}
+    });
+    write_json_file(test_dir_ / "runtime_config_history.json", history);
+
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+    facade.register_agent(std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config(agent_a, "executor", {"execute"})));
+    facade.register_agent(std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config(agent_b, "executor", {"execute"})));
+
+    const auto version_a_before = facade.get_agent_runtime_version(agent_a);
+    const auto version_b_before = facade.get_agent_runtime_version(agent_b);
+    EXPECT_EQ(version_a_before["version"].get<std::uint64_t>(), 4U);
+    EXPECT_EQ(version_b_before["version"].get<std::uint64_t>(), 2U);
+    EXPECT_EQ(facade.get_agent_runtime_history(agent_a).size(), 4U);
+    EXPECT_EQ(facade.get_agent_runtime_history(agent_b).size(), 2U);
+
+    facade.clear_old_runtime_config_history(2);
+
+    const auto version_a_after = facade.get_agent_runtime_version(agent_a);
+    const auto version_b_after = facade.get_agent_runtime_version(agent_b);
+    EXPECT_EQ(version_a_after["version"].get<std::uint64_t>(), 4U);
+    EXPECT_EQ(version_b_after["version"].get<std::uint64_t>(), 2U);
+
+    const auto history_a_after = facade.get_agent_runtime_history(agent_a);
+    ASSERT_EQ(history_a_after.size(), 2U);
+    EXPECT_EQ(history_a_after[0]["version"].get<std::uint64_t>(), 3U);
+    EXPECT_EQ(history_a_after[1]["version"].get<std::uint64_t>(), 4U);
+
+    const auto history_b_after = facade.get_agent_runtime_history(agent_b);
+    ASSERT_EQ(history_b_after.size(), 2U);
+    EXPECT_EQ(history_b_after[0]["version"].get<std::uint64_t>(), 1U);
+    EXPECT_EQ(history_b_after[1]["version"].get<std::uint64_t>(), 2U);
+
+    const auto status = facade.get_status();
+    ASSERT_TRUE(status.contains("runtime_config"));
+    const auto runtime = status["runtime_config"];
+    EXPECT_EQ(runtime["history_entries"].get<std::size_t>(), 4U);
+
+    const auto runtime_summary_for = [&runtime](const std::string& id) -> nlohmann::json {
+        if (!runtime.contains("agents") || !runtime["agents"].is_array()) {
+            return nlohmann::json();
+        }
+        for (const auto& item : runtime["agents"]) {
+            if (item.value("agent_id", std::string()) == id) {
+                return item;
+            }
+        }
+        return nlohmann::json();
+    };
+
+    const auto summary_a = runtime_summary_for(agent_a);
+    ASSERT_TRUE(summary_a.is_object());
+    EXPECT_EQ(summary_a["current_version"].get<std::uint64_t>(), 4U);
+    EXPECT_EQ(summary_a["history_count"].get<std::size_t>(), 2U);
+
+    const auto summary_b = runtime_summary_for(agent_b);
+    ASSERT_TRUE(summary_b.is_object());
+    EXPECT_EQ(summary_b["current_version"].get<std::uint64_t>(), 2U);
+    EXPECT_EQ(summary_b["history_count"].get<std::size_t>(), 2U);
+
+    const auto pruned_diff = facade.get_agent_runtime_diff(agent_a, 1, 2);
+    EXPECT_EQ(pruned_diff.value("error", std::string()), "version_not_found");
+    EXPECT_EQ(pruned_diff["requested_version"].get<std::uint64_t>(), 1U);
+
+    const auto pruned_baseline_diff = facade.get_agent_runtime_diff(agent_a, 0, 4);
+    EXPECT_EQ(pruned_baseline_diff.value("error", std::string()), "version_not_found");
+    EXPECT_EQ(pruned_baseline_diff["requested_version"].get<std::uint64_t>(), 0U);
+
+    const auto kept_diff = facade.get_agent_runtime_diff(agent_a, 3, 4);
+    EXPECT_FALSE(kept_diff.contains("error"));
+
+    const auto unpruned_baseline_diff = facade.get_agent_runtime_diff(agent_b, 0, 2);
+    EXPECT_FALSE(unpruned_baseline_diff.contains("error"));
+}
+
+TEST_F(IntegrationTest, RuntimeConfigHistoryPrunePersistsAndDoesNotRenumberVersions) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+
+    const std::string agent_id = "executor-runtime-prune-persist";
+
+    const auto s0 = make_runtime_snapshot(agent_id, "executor", "persist prompt v0", "1.0.0");
+    const auto s1 = make_runtime_snapshot(agent_id, "executor", "persist prompt v1", "1.0.1");
+    const auto s2 = make_runtime_snapshot(agent_id, "executor", "persist prompt v2", "1.0.2");
+    const auto s3 = make_runtime_snapshot(agent_id, "executor", "persist prompt v3", "1.0.3");
+    const auto s4 = make_runtime_snapshot(agent_id, "executor", "persist prompt v4", "1.0.4");
+    const auto s5 = make_runtime_snapshot(agent_id, "executor", "persist prompt v5", "1.0.5");
+    const auto s6 = make_runtime_snapshot(agent_id, "executor", "persist prompt v6", "1.0.6");
+
+    nlohmann::json history = nlohmann::json::array();
+    const auto push_record = [&history](const std::string& id,
+                                        const std::uint64_t version,
+                                        const nlohmann::json& before,
+                                        const nlohmann::json& after,
+                                        const std::string& changed_at) {
+        history.push_back({
+            {"agent_id", id},
+            {"version", version},
+            {"proposal_id", "proposal-persist-" + std::to_string(version)},
+            {"before", before},
+            {"after", after},
+            {"diff", {{"system_prompt", {{"before", before["system_prompt"]}, {"after", after["system_prompt"]}}}}},
+            {"changed_at", changed_at}
+        });
+    };
+
+    push_record(agent_id, 1U, s0, s1, "2026-03-01T11:00:00");
+    push_record(agent_id, 2U, s1, s2, "2026-03-01T11:01:00");
+    push_record(agent_id, 3U, s2, s3, "2026-03-01T11:02:00");
+    push_record(agent_id, 4U, s3, s4, "2026-03-01T11:03:00");
+    push_record(agent_id, 5U, s4, s5, "2026-03-01T11:04:00");
+    push_record(agent_id, 6U, s5, s6, "2026-03-01T11:05:00");
+
+    write_json_file(test_dir_ / "runtime_config_versions.json", {
+        {agent_id, 6U}
+    });
+    write_json_file(test_dir_ / "runtime_config_history.json", history);
+
+    {
+        evoclaw::facade::EvoClawFacade facade(config);
+        facade.initialize();
+        facade.register_agent(std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config(agent_id, "executor", {"execute"})));
+
+        EXPECT_EQ(facade.get_agent_runtime_version(agent_id)["version"].get<std::uint64_t>(), 6U);
+        EXPECT_EQ(facade.get_agent_runtime_history(agent_id).size(), 6U);
+
+        facade.clear_old_runtime_config_history(2);
+
+        const auto pruned_history = facade.get_agent_runtime_history(agent_id);
+        ASSERT_EQ(pruned_history.size(), 2U);
+        EXPECT_EQ(pruned_history[0]["version"].get<std::uint64_t>(), 5U);
+        EXPECT_EQ(pruned_history[1]["version"].get<std::uint64_t>(), 6U);
+        EXPECT_EQ(facade.get_agent_runtime_version(agent_id)["version"].get<std::uint64_t>(), 6U);
+
+        facade.save_state();
+    }
+
+    {
+        evoclaw::facade::EvoClawFacade facade2(config);
+        facade2.initialize();
+        facade2.register_agent(std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config(agent_id, "executor", {"execute"})));
+
+        const auto version_after_load = facade2.get_agent_runtime_version(agent_id);
+        EXPECT_EQ(version_after_load["version"].get<std::uint64_t>(), 6U);
+
+        const auto history_after_load = facade2.get_agent_runtime_history(agent_id);
+        ASSERT_EQ(history_after_load.size(), 2U);
+        EXPECT_EQ(history_after_load[0]["version"].get<std::uint64_t>(), 5U);
+        EXPECT_EQ(history_after_load[1]["version"].get<std::uint64_t>(), 6U);
+
+        const auto status = facade2.get_status();
+        ASSERT_TRUE(status.contains("runtime_config"));
+        EXPECT_EQ(status["runtime_config"]["history_entries"].get<std::size_t>(), 2U);
     }
 }
 

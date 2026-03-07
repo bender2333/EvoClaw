@@ -93,6 +93,7 @@ public:
     void save_runtime_config_history() const;
     void load_runtime_config_history();
     void clear_old_evolution_history(std::size_t keep_last);
+    void clear_old_runtime_config_history(std::size_t keep_last_per_agent);
     [[nodiscard]] bool verify_event_log() const;
 
 private:
