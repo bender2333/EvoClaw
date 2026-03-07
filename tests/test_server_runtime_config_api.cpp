@@ -370,6 +370,91 @@ TEST_F(RuntimeConfigServerApiTest, PruneValidationErrorsReturnBuildErrorWith400)
     }
 }
 
+TEST_F(RuntimeConfigServerApiTest, GovernanceEndpointsExposeAndUpdateAutoPruneConfig) {
+    {
+        httplib::Request req;
+        httplib::Response res;
+        server_->handle_runtime_config_governance_get(req, res);
+
+        EXPECT_EQ(res.status, 200);
+        const auto payload = parse_response_body(res);
+        EXPECT_FALSE(payload["auto_prune_enabled"].get<bool>());
+        EXPECT_EQ(payload["keep_last_per_agent"].get<std::size_t>(), 0U);
+    }
+
+    {
+        httplib::Request req;
+        req.body = R"({"keep_last_per_agent":1})";
+        httplib::Response res;
+        server_->handle_runtime_config_governance_post(req, res);
+
+        EXPECT_EQ(res.status, 200);
+        const auto payload = parse_response_body(res);
+        EXPECT_TRUE(payload.value("ok", false));
+        ASSERT_TRUE(payload.contains("governance"));
+        EXPECT_TRUE(payload["governance"]["auto_prune_enabled"].get<bool>());
+        EXPECT_EQ(payload["governance"]["keep_last_per_agent"].get<std::size_t>(), 1U);
+        ASSERT_TRUE(payload.contains("runtime_config"));
+        EXPECT_EQ(payload["runtime_config"]["history_entries"].get<std::size_t>(), 1U);
+        ASSERT_TRUE(payload["runtime_config"].contains("governance"));
+        EXPECT_EQ(payload["runtime_config"]["governance"]["keep_last_per_agent"].get<std::size_t>(), 1U);
+    }
+
+    {
+        auto history_req = request_with_params({{"agent_id", agent_id_}});
+        httplib::Response history_res;
+        server_->handle_runtime_config_history(history_req, history_res);
+
+        EXPECT_EQ(history_res.status, 200);
+        const auto history_payload = parse_response_body(history_res);
+        ASSERT_EQ(history_payload.size(), 1U);
+        EXPECT_EQ(history_payload[0]["version"].get<std::uint64_t>(), 2U);
+    }
+
+    const auto persisted_history = read_json_file(test_dir_ / "runtime_config_history.json");
+    ASSERT_TRUE(persisted_history.is_array());
+    ASSERT_EQ(persisted_history.size(), 1U);
+    EXPECT_EQ(persisted_history[0]["version"].get<std::uint64_t>(), 2U);
+}
+
+TEST_F(RuntimeConfigServerApiTest, GovernanceValidationErrorsReturn400) {
+    {
+        httplib::Request req;
+        req.body = "{";
+        httplib::Response res;
+        server_->handle_runtime_config_governance_post(req, res);
+
+        EXPECT_EQ(res.status, 400);
+        const auto payload = parse_response_body(res);
+        EXPECT_FALSE(payload.value("ok", true));
+        EXPECT_TRUE(payload["error"].is_string());
+    }
+
+    {
+        httplib::Request req;
+        req.body = "{}";
+        httplib::Response res;
+        server_->handle_runtime_config_governance_post(req, res);
+
+        EXPECT_EQ(res.status, 400);
+        const auto payload = parse_response_body(res);
+        EXPECT_FALSE(payload.value("ok", true));
+        EXPECT_TRUE(payload["error"].is_string());
+    }
+
+    {
+        httplib::Request req;
+        req.body = R"({"keep_last_per_agent":-1})";
+        httplib::Response res;
+        server_->handle_runtime_config_governance_post(req, res);
+
+        EXPECT_EQ(res.status, 400);
+        const auto payload = parse_response_body(res);
+        EXPECT_FALSE(payload.value("ok", true));
+        EXPECT_TRUE(payload["error"].is_string());
+    }
+}
+
 TEST(DashboardHtmlTest, IncludesRuntimeConfigSummaryPruneAndInspectorControls) {
     const std::string html = evoclaw::server::dashboard::kDashboardHtml;
     EXPECT_NE(html.find("Runtime Tracked Agents"), std::string::npos);

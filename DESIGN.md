@@ -1237,3 +1237,27 @@ Dashboard 接入 runtime config API，先做轻量可观测性与治理入口，
 - 自动裁剪后持久化重启，history 仍符合阈值
 - `get_status()` 正确反映 governance 配置
 - 对已被自动裁剪的旧版本做 diff 查询返回 `version_not_found`
+
+### 5.6 Server/API 暴露（slice 2）
+在 server 层暴露 runtime governance 查询与更新接口：
+
+- `GET /api/runtime-config/governance`
+  - 返回当前 runtime governance 配置摘要
+- `POST /api/runtime-config/governance`
+  - body: `{ "keep_last_per_agent": 2 }`
+  - 在线更新自动治理阈值并立即生效
+  - 如果阈值从 0 改为 >0，应立即对现有 history 做收敛
+  - 成功后返回最新 governance + runtime_config 摘要
+
+约束：
+- 仍不改变 `runtime_config_versions_` 的单调性
+- 更新阈值后需要 `save_state()`，确保当前收敛后的状态落盘
+- 参数非法返回 `400`
+- 不额外发明复杂配置结构，先只暴露 `keep_last_per_agent`
+
+### 5.7 测试要求（slice 2）
+- governance GET 能返回当前 `auto_prune_enabled` 与 `keep_last_per_agent`
+- governance POST 能更新阈值并立即反映到 status/runtime summary
+- 当 POST 设置较小阈值时，现有 history 会立即被裁剪
+- 裁剪后持久化文件内容与返回状态一致
+- 非法 body / 非法阈值返回 `400`

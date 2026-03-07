@@ -1280,6 +1280,18 @@ nlohmann::json EvoClawFacade::get_agent_runtime_diff(const AgentId& agent_id,
     };
 }
 
+nlohmann::json EvoClawFacade::get_runtime_governance_status() const {
+    return {
+        {"auto_prune_enabled", config_.runtime_history_keep_last_per_agent > 0U},
+        {"keep_last_per_agent", config_.runtime_history_keep_last_per_agent}
+    };
+}
+
+void EvoClawFacade::set_runtime_history_keep_last_per_agent(const std::size_t keep_last_per_agent) {
+    config_.runtime_history_keep_last_per_agent = keep_last_per_agent;
+    maybe_auto_prune_runtime_config_history();
+}
+
 bool EvoClawFacade::validate_patch_schema(const nlohmann::json& patch, std::string* reason) {
     if (!patch.is_object()) {
         if (reason) *reason = "patch must be a JSON object";

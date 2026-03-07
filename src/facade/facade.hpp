@@ -81,6 +81,8 @@ public:
     [[nodiscard]] nlohmann::json get_agent_runtime_diff(const AgentId& agent_id,
                                                         std::uint64_t from_version,
                                                         std::uint64_t to_version) const;
+    [[nodiscard]] nlohmann::json get_runtime_governance_status() const;
+    void set_runtime_history_keep_last_per_agent(std::size_t keep_last_per_agent);
     bool rollback_proposal(const std::string& proposal_id, std::string* reason = nullptr);
     [[nodiscard]] static bool validate_patch_schema(const nlohmann::json& patch, std::string* reason = nullptr);
     [[nodiscard]] nlohmann::json list_rollback_snapshots() const;

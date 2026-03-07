@@ -527,6 +527,14 @@ void EvoClawServer::setup_routes() {
         handle_runtime_config_history_prune(req, res);
     });
 
+    server_.Get("/api/runtime-config/governance", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_runtime_config_governance_get(req, res);
+    });
+
+    server_.Post("/api/runtime-config/governance", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_runtime_config_governance_post(req, res);
+    });
+
     server_.Get("/api/events", [this](const httplib::Request&, httplib::Response& res) {
         json payload;
         payload["events"] = json::array();
@@ -706,6 +714,49 @@ void EvoClawServer::handle_runtime_config_history_prune(const httplib::Request& 
         set_json_response(res, {
             {"ok", true},
             {"keep_last_per_agent", *keep_last_per_agent},
+            {"runtime_config", status.value("runtime_config", json::object())}
+        });
+    } catch (const std::exception& ex) {
+        set_json_response(res, build_error(ex.what()), 500);
+    }
+}
+
+void EvoClawServer::handle_runtime_config_governance_get(const httplib::Request&, httplib::Response& res) {
+    try {
+        set_json_response(res, facade_.get_runtime_governance_status());
+    } catch (const std::exception& ex) {
+        set_json_response(res, build_error(ex.what()), 500);
+    }
+}
+
+void EvoClawServer::handle_runtime_config_governance_post(const httplib::Request& req, httplib::Response& res) {
+    json body;
+    try {
+        body = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+        set_json_response(res, build_error("Invalid JSON body"), 400);
+        return;
+    }
+
+    if (!body.contains("keep_last_per_agent")) {
+        set_json_response(res, build_error("Field 'keep_last_per_agent' is required"), 400);
+        return;
+    }
+
+    const auto keep_last_per_agent = parse_non_negative_size_t(body["keep_last_per_agent"]);
+    if (!keep_last_per_agent.has_value()) {
+        set_json_response(res, build_error("Field 'keep_last_per_agent' must be a non-negative integer"), 400);
+        return;
+    }
+
+    try {
+        facade_.set_runtime_history_keep_last_per_agent(*keep_last_per_agent);
+        facade_.save_state();
+
+        const auto status = facade_.get_status();
+        set_json_response(res, {
+            {"ok", true},
+            {"governance", facade_.get_runtime_governance_status()},
             {"runtime_config", status.value("runtime_config", json::object())}
         });
     } catch (const std::exception& ex) {

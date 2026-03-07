@@ -30,6 +30,8 @@ public:
     void handle_runtime_config_history(const httplib::Request& req, httplib::Response& res);
     void handle_runtime_config_diff(const httplib::Request& req, httplib::Response& res);
     void handle_runtime_config_history_prune(const httplib::Request& req, httplib::Response& res);
+    void handle_runtime_config_governance_get(const httplib::Request& req, httplib::Response& res);
+    void handle_runtime_config_governance_post(const httplib::Request& req, httplib::Response& res);
 
 private:
     struct SseClient {
