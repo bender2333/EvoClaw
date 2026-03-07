@@ -1101,3 +1101,32 @@ Dashboard 接入 runtime config API，先做轻量可观测性与治理入口，
 - agent 卡片能显示 runtime version / history_count / latest_changed_at
 - prune 操作提交成功后能刷新页面状态
 - prune 参数非法时能在前端显示失败事件
+
+### 4.14 Dashboard slice 2：History / Diff 钻取
+新增一个 Runtime Config Inspector 面板，提供按 agent 的审计钻取能力。
+
+展示与交互：
+- 面板展示：
+  - 当前选中的 `agent_id`
+  - runtime history 列表（version / proposal_id / changed_at）
+  - diff 查询控件：`from_version`、`to_version`
+  - diff 结果展示区
+- 用户可通过以下方式选中 agent：
+  - 点击 agent 卡片中的“Inspect Runtime”按钮，或
+  - 在 inspector 中切换 agent
+- history 按需加载：
+  - 仅在用户选中 agent 时请求 `GET /api/runtime-config/history?agent_id=...`
+- diff 按需加载：
+  - 用户点击 Compare 后请求 `GET /api/runtime-config/diff?...`
+
+前端约束：
+- 首屏仍不自动拉全量 history/diff
+- diff 结果用可读的 JSON / preformatted block 展示，不引入外部 JSON viewer
+- 若 history 为空，明确显示 empty state
+- 若 diff 返回 `version_not_found`，明确提示“所需版本已被裁剪或不存在”
+- 若请求失败，写入 event feed，同时在 inspector 中显示错误文本
+
+### 4.15 Dashboard slice 2 测试要求
+- dashboard HTML 包含 runtime inspector 区域与 compare 控件
+- 包含 history/diff 相关标签或按钮文案
+- 保持既有 dashboard 功能与测试不回归

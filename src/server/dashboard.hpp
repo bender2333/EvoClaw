@@ -76,6 +76,7 @@ inline constexpr const char* kDashboardHtml = R"html(
       grid-template-areas:
         "overview events"
         "agents actions"
+        "agents runtime"
         "agents evolution";
     }
 
@@ -96,6 +97,7 @@ inline constexpr const char* kDashboardHtml = R"html(
     .events { grid-area: events; }
     .agents { grid-area: agents; }
     .actions { grid-area: actions; }
+    .runtime { grid-area: runtime; }
     .evolution { grid-area: evolution; }
 
     .stats {
@@ -185,6 +187,17 @@ inline constexpr const char* kDashboardHtml = R"html(
       margin: 0.2rem 0;
     }
 
+    .inspect-runtime-btn {
+      margin-top: 0.55rem;
+      background: #132d4f;
+      border-color: #2b4f7b;
+    }
+
+    .inspect-runtime-btn.active {
+      background: var(--accent);
+      border-color: #ff758b;
+    }
+
     .actions form {
       display: grid;
       gap: 0.6rem;
@@ -254,6 +267,66 @@ inline constexpr const char* kDashboardHtml = R"html(
       font-size: 0.85rem;
     }
 
+    .runtime-selected {
+      margin: 0 0 0.6rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .runtime-history-list {
+      margin-bottom: 0.8rem;
+      max-height: 160px;
+    }
+
+    .runtime-history-empty {
+      margin: 0 0 0.8rem;
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .runtime-diff-form {
+      display: grid;
+      gap: 0.65rem;
+    }
+
+    .runtime-compare-controls {
+      display: grid;
+      gap: 0.6rem;
+      grid-template-columns: 1fr 1fr auto;
+      align-items: end;
+    }
+
+    .runtime-compare-controls button {
+      min-width: 110px;
+    }
+
+    .runtime-inline-message {
+      margin: 0;
+      min-height: 1.2rem;
+      color: var(--warn);
+      font-size: 0.82rem;
+    }
+
+    .runtime-inline-message.error {
+      color: var(--accent);
+    }
+
+    .runtime-diff-output {
+      margin: 0;
+      max-height: 220px;
+      overflow: auto;
+      background: #101c34;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem;
+      color: #d6ddf1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     .footer {
       background: var(--card);
       border: 1px solid var(--border);
@@ -270,12 +343,17 @@ inline constexpr const char* kDashboardHtml = R"html(
           "overview"
           "actions"
           "agents"
+          "runtime"
           "events"
           "evolution";
       }
 
       .event-feed {
         height: 260px;
+      }
+
+      .runtime-compare-controls {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -356,6 +434,28 @@ inline constexpr const char* kDashboardHtml = R"html(
         <h2>Evolution History</h2>
         <ol class="history-list" id="evolution-history"></ol>
       </section>
+
+      <section class="card runtime">
+        <h2>Runtime Config Inspector</h2>
+        <p class="runtime-selected" id="runtime-inspector-selected">Select an agent and click Inspect Runtime.</p>
+        <ol class="history-list runtime-history-list" id="runtime-history-list"></ol>
+        <p class="runtime-history-empty" id="runtime-history-empty">Select an agent to load runtime history.</p>
+        <form id="runtime-diff-form" class="runtime-diff-form">
+          <div class="runtime-compare-controls">
+            <div>
+              <label class="ops-label" for="runtime-from-version">from_version</label>
+              <input id="runtime-from-version" type="number" min="0" step="1" value="0" />
+            </div>
+            <div>
+              <label class="ops-label" for="runtime-to-version">to_version</label>
+              <input id="runtime-to-version" type="number" min="0" step="1" value="0" />
+            </div>
+            <button type="submit" id="runtime-compare-btn">Compare</button>
+          </div>
+        </form>
+        <p class="runtime-inline-message" id="runtime-diff-message"></p>
+        <pre class="runtime-diff-output" id="runtime-diff-output">Diff will appear here after compare.</pre>
+      </section>
     </main>
 
     <footer class="footer">
@@ -368,7 +468,19 @@ inline constexpr const char* kDashboardHtml = R"html(
       events: [],
       evolution: [],
       agentsPayload: null,
-      runtimeConfigByAgent: Object.create(null)
+      runtimeConfigByAgent: Object.create(null),
+      runtimeInspector: {
+        selectedAgentId: null,
+        historyByAgent: Object.create(null),
+        historyLoadingByAgent: Object.create(null),
+        historyErrorByAgent: Object.create(null),
+        fromVersion: '0',
+        toVersion: '0',
+        diffOutput: 'Diff will appear here after compare.',
+        diffMessage: '',
+        diffError: false,
+        diffLoading: false
+      }
     };
 
     const refs = {
@@ -388,8 +500,27 @@ inline constexpr const char* kDashboardHtml = R"html(
       taskType: document.getElementById('task-type'),
       evolveBtn: document.getElementById('evolve-btn'),
       runtimePruneForm: document.getElementById('runtime-prune-form'),
-      keepLastPerAgent: document.getElementById('keep-last-per-agent')
+      keepLastPerAgent: document.getElementById('keep-last-per-agent'),
+      runtimeInspectorSelected: document.getElementById('runtime-inspector-selected'),
+      runtimeHistoryList: document.getElementById('runtime-history-list'),
+      runtimeHistoryEmpty: document.getElementById('runtime-history-empty'),
+      runtimeDiffForm: document.getElementById('runtime-diff-form'),
+      runtimeFromVersion: document.getElementById('runtime-from-version'),
+      runtimeToVersion: document.getElementById('runtime-to-version'),
+      runtimeCompareBtn: document.getElementById('runtime-compare-btn'),
+      runtimeDiffMessage: document.getElementById('runtime-diff-message'),
+      runtimeDiffOutput: document.getElementById('runtime-diff-output')
     };
+
+    function errorDetail(err) {
+      if (err && err.payload && typeof err.payload.error === 'string' && err.payload.error) {
+        return err.payload.error;
+      }
+      if (err && typeof err.message === 'string' && err.message) {
+        return err.message;
+      }
+      return 'request failed';
+    }
 
     function fmtTime(raw) {
       if (!raw) return new Date().toLocaleTimeString();
@@ -482,16 +613,154 @@ inline constexpr const char* kDashboardHtml = R"html(
           <p class="agent-line">runtime_history_count: ${runtimeHistoryCount}</p>
           <p class="agent-line">runtime_latest_changed_at: ${runtimeLatestChangedAt}</p>
         `;
+        const inspectButton = document.createElement('button');
+        inspectButton.type = 'button';
+        inspectButton.className = 'inspect-runtime-btn';
+        if (state.runtimeInspector.selectedAgentId === agent.agent_id) {
+          inspectButton.className += ' active';
+        }
+        inspectButton.textContent = 'Inspect Runtime';
+        inspectButton.addEventListener('click', () => {
+          selectRuntimeAgent(agent.agent_id);
+        });
+        card.appendChild(inspectButton);
         refs.agentGrid.appendChild(card);
       }
     }
 
     async function getJson(url, init) {
-      const res = await fetch(url, init);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+      let res = null;
+      try {
+        res = await fetch(url, init);
+      } catch (err) {
+        throw new Error(`request failed: ${err && err.message ? err.message : 'network error'}`);
       }
-      return await res.json();
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch (_) {
+        payload = null;
+      }
+      if (!res.ok) {
+        const error = new Error(payload && payload.error ? payload.error : `HTTP ${res.status}`);
+        error.payload = payload;
+        throw error;
+      }
+      if (payload === null) {
+        throw new Error('Invalid JSON response');
+      }
+      return payload;
+    }
+
+    function renderRuntimeInspector() {
+      const inspector = state.runtimeInspector;
+      const selectedAgentId = inspector.selectedAgentId;
+
+      refs.runtimeHistoryList.innerHTML = '';
+      refs.runtimeHistoryEmpty.style.display = 'none';
+      refs.runtimeDiffOutput.textContent = inspector.diffOutput;
+      refs.runtimeFromVersion.value = inspector.fromVersion;
+      refs.runtimeToVersion.value = inspector.toVersion;
+      refs.runtimeCompareBtn.disabled = !selectedAgentId || inspector.diffLoading;
+      refs.runtimeCompareBtn.textContent = inspector.diffLoading ? 'Comparing...' : 'Compare';
+      refs.runtimeDiffMessage.className = inspector.diffError ? 'runtime-inline-message error' : 'runtime-inline-message';
+      refs.runtimeDiffMessage.textContent = inspector.diffMessage || '';
+
+      if (!selectedAgentId) {
+        refs.runtimeInspectorSelected.textContent = 'Select an agent and click Inspect Runtime.';
+        refs.runtimeHistoryEmpty.style.display = 'block';
+        refs.runtimeHistoryEmpty.textContent = 'Select an agent to load runtime history.';
+        return;
+      }
+
+      refs.runtimeInspectorSelected.textContent = `Inspecting agent: ${selectedAgentId}`;
+      const history = inspector.historyByAgent[selectedAgentId];
+      const isLoading = Boolean(inspector.historyLoadingByAgent[selectedAgentId]);
+      const historyError = inspector.historyErrorByAgent[selectedAgentId];
+
+      if (isLoading) {
+        refs.runtimeHistoryEmpty.style.display = 'block';
+        refs.runtimeHistoryEmpty.textContent = 'Loading runtime history...';
+        return;
+      }
+
+      if (historyError) {
+        refs.runtimeHistoryEmpty.style.display = 'block';
+        refs.runtimeHistoryEmpty.textContent = historyError;
+        return;
+      }
+
+      if (!Array.isArray(history) || history.length === 0) {
+        refs.runtimeHistoryEmpty.style.display = 'block';
+        refs.runtimeHistoryEmpty.textContent = 'No runtime config history entries for this agent.';
+        return;
+      }
+
+      for (const entry of history.slice().reverse()) {
+        const li = document.createElement('li');
+        li.textContent = `version=${entry.version ?? '-'} | proposal_id=${entry.proposal_id || '-'} | changed_at=${fmtDateTime(entry.changed_at)}`;
+        refs.runtimeHistoryList.appendChild(li);
+      }
+    }
+
+    async function ensureRuntimeHistory(agentId) {
+      if (!agentId) {
+        return;
+      }
+      const inspector = state.runtimeInspector;
+      if (inspector.historyLoadingByAgent[agentId]) {
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(inspector.historyByAgent, agentId) && !inspector.historyErrorByAgent[agentId]) {
+        return;
+      }
+
+      inspector.historyLoadingByAgent[agentId] = true;
+      inspector.historyErrorByAgent[agentId] = '';
+      renderRuntimeInspector();
+
+      try {
+        const query = new URLSearchParams({ agent_id: agentId });
+        const payload = await getJson(`/api/runtime-config/history?${query.toString()}`);
+        inspector.historyByAgent[agentId] = Array.isArray(payload) ? payload : [];
+        inspector.historyErrorByAgent[agentId] = '';
+
+        if (inspector.selectedAgentId === agentId && inspector.historyByAgent[agentId].length > 0) {
+          const latest = inspector.historyByAgent[agentId][inspector.historyByAgent[agentId].length - 1];
+          const latestVersion = Number.isInteger(latest.version) ? latest.version : 0;
+          inspector.toVersion = String(latestVersion);
+          inspector.fromVersion = String(latestVersion > 0 ? latestVersion - 1 : 0);
+        }
+      } catch (err) {
+        delete inspector.historyByAgent[agentId];
+        inspector.historyErrorByAgent[agentId] = `Runtime history load failed: ${errorDetail(err)}`;
+      } finally {
+        inspector.historyLoadingByAgent[agentId] = false;
+        renderRuntimeInspector();
+      }
+    }
+
+    function selectRuntimeAgent(agentId) {
+      if (!agentId) {
+        return;
+      }
+
+      const inspector = state.runtimeInspector;
+      inspector.selectedAgentId = agentId;
+      inspector.diffOutput = 'Diff will appear here after compare.';
+      inspector.diffMessage = '';
+      inspector.diffError = false;
+
+      const runtimeSummary = state.runtimeConfigByAgent[agentId] || {};
+      const latestVersion = Number.isInteger(runtimeSummary.current_version) ? runtimeSummary.current_version : 0;
+      inspector.toVersion = String(latestVersion);
+      inspector.fromVersion = String(latestVersion > 0 ? latestVersion - 1 : 0);
+
+      if (state.agentsPayload) {
+        renderAgents(state.agentsPayload);
+      }
+      renderRuntimeInspector();
+      ensureRuntimeHistory(agentId).catch(() => {});
     }
 
     async function refreshStatus() {
@@ -530,6 +799,19 @@ inline constexpr const char* kDashboardHtml = R"html(
       const agents = await getJson('/api/agents');
       state.agentsPayload = agents;
       renderAgents(state.agentsPayload);
+
+      const selectedAgentId = state.runtimeInspector.selectedAgentId;
+      if (!selectedAgentId) {
+        return;
+      }
+      const exists = (state.agentsPayload.agents || []).some((agent) => agent.agent_id === selectedAgentId);
+      if (!exists) {
+        state.runtimeInspector.selectedAgentId = null;
+        state.runtimeInspector.diffOutput = 'Diff will appear here after compare.';
+        state.runtimeInspector.diffMessage = '';
+        state.runtimeInspector.diffError = false;
+      }
+      renderRuntimeInspector();
     }
 
     async function loadEventHistory() {
@@ -630,7 +912,14 @@ inline constexpr const char* kDashboardHtml = R"html(
           })
         });
 
+        state.runtimeInspector.historyByAgent = Object.create(null);
+        state.runtimeInspector.historyLoadingByAgent = Object.create(null);
+        state.runtimeInspector.historyErrorByAgent = Object.create(null);
+
         await Promise.all([refreshStatus(), refreshAgents()]);
+        if (state.runtimeInspector.selectedAgentId) {
+          ensureRuntimeHistory(state.runtimeInspector.selectedAgentId).catch(() => {});
+        }
 
         const historyEntries = payload
           && payload.runtime_config
@@ -651,6 +940,68 @@ inline constexpr const char* kDashboardHtml = R"html(
       }
     });
 
+    refs.runtimeDiffForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const selectedAgentId = state.runtimeInspector.selectedAgentId;
+      if (!selectedAgentId) {
+        state.runtimeInspector.diffMessage = 'Select an agent before comparing runtime versions.';
+        state.runtimeInspector.diffError = true;
+        renderRuntimeInspector();
+        return;
+      }
+
+      const fromVersion = Number.parseInt(refs.runtimeFromVersion.value, 10);
+      const toVersion = Number.parseInt(refs.runtimeToVersion.value, 10);
+      if (!Number.isInteger(fromVersion) || !Number.isInteger(toVersion) || fromVersion < 0 || toVersion < 0) {
+        state.runtimeInspector.diffMessage = 'from_version and to_version must be non-negative integers.';
+        state.runtimeInspector.diffError = true;
+        renderRuntimeInspector();
+        return;
+      }
+
+      state.runtimeInspector.fromVersion = String(fromVersion);
+      state.runtimeInspector.toVersion = String(toVersion);
+      state.runtimeInspector.diffLoading = true;
+      state.runtimeInspector.diffMessage = '';
+      state.runtimeInspector.diffError = false;
+      renderRuntimeInspector();
+
+      try {
+        const query = new URLSearchParams({
+          agent_id: selectedAgentId,
+          from_version: String(fromVersion),
+          to_version: String(toVersion)
+        });
+        const payload = await getJson(`/api/runtime-config/diff?${query.toString()}`);
+        state.runtimeInspector.diffOutput = JSON.stringify(payload.diff || {}, null, 2);
+        state.runtimeInspector.diffMessage = `Compared runtime config versions ${fromVersion} -> ${toVersion}.`;
+      } catch (err) {
+        let message = `Runtime diff request failed: ${errorDetail(err)}.`;
+        if (err && err.payload && err.payload.error === 'version_not_found') {
+          const requested = err.payload.requested_version;
+          const current = err.payload.current_version;
+          if (typeof requested === 'number' && typeof current === 'number') {
+            message = `Runtime diff failed: version_not_found (requested=${requested}, current=${current}).`;
+          } else if (typeof requested === 'number') {
+            message = `Runtime diff failed: version_not_found (requested=${requested}).`;
+          } else {
+            message = 'Runtime diff failed: version_not_found.';
+          }
+        }
+        state.runtimeInspector.diffOutput = 'Diff unavailable.';
+        state.runtimeInspector.diffMessage = message;
+        state.runtimeInspector.diffError = true;
+        appendEvent({
+          event: 'runtime_config_diff_failed',
+          message: `${message} [agent_id=${selectedAgentId}, from_version=${fromVersion}, to_version=${toVersion}]`,
+          timestamp: new Date().toISOString()
+        });
+      } finally {
+        state.runtimeInspector.diffLoading = false;
+        renderRuntimeInspector();
+      }
+    });
+
     async function bootstrap() {
       try {
         await Promise.all([refreshStatus(), refreshAgents(), loadEventHistory()]);
@@ -663,6 +1014,7 @@ inline constexpr const char* kDashboardHtml = R"html(
       }
 
       connectStream();
+      renderRuntimeInspector();
       setInterval(() => refreshStatus().catch(() => {}), 5000);
       setInterval(() => refreshAgents().catch(() => {}), 15000);
     }
