@@ -384,6 +384,88 @@ TEST_F(IntegrationTest, RuntimeConfigVersioningTracksPatchRollbackAndDiff) {
     EXPECT_TRUE(diff02["diff"].empty());
 }
 
+TEST_F(IntegrationTest, RuntimeConfigVersionHistoryPersistenceRoundTrip) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 1;
+    config.evolver_config.consecutive_failures = 100;
+
+    const std::string agent_id = "executor-version-persist";
+    std::uint64_t version_before = 0U;
+    nlohmann::json history_before = nlohmann::json::array();
+
+    {
+        evoclaw::facade::EvoClawFacade facade(config);
+        facade.initialize();
+
+        auto executor = std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config(agent_id, "executor", {"execute"}));
+        facade.register_agent(executor);
+
+        for (int i = 0; i < 10; ++i) {
+            evoclaw::agent::Task task;
+            task.id = "persist-version-kpi-" + std::to_string(i);
+            task.description = "score task";
+            task.type = evoclaw::TaskType::ROUTE;
+            task.context["intent"] = "execute";
+            task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+            task.context["score"] = (i < 6) ? 0.9 : 0.8;
+            (void)facade.submit_task(task);
+        }
+
+        facade.trigger_evolution();
+
+        const auto status = facade.get_status();
+        const auto cycle = status["evolution"].value("last_cycle", nlohmann::json::object());
+        ASSERT_TRUE(cycle.contains("proposals"));
+
+        bool saw_runtime_patch = false;
+        for (const auto& proposal : cycle["proposals"]) {
+            if (proposal.value("applied", false) && proposal.value("runtime_patch_applied", false)) {
+                saw_runtime_patch = true;
+                break;
+            }
+        }
+        ASSERT_TRUE(saw_runtime_patch);
+
+        const auto version_json = facade.get_agent_runtime_version(agent_id);
+        ASSERT_TRUE(version_json.contains("version"));
+        version_before = version_json["version"].get<std::uint64_t>();
+        ASSERT_GT(version_before, 0U);
+
+        history_before = facade.get_agent_runtime_history(agent_id);
+        ASSERT_TRUE(history_before.is_array());
+        ASSERT_FALSE(history_before.empty());
+        EXPECT_EQ(history_before.back()["version"].get<std::uint64_t>(), version_before);
+
+        facade.save_state();
+    }
+
+    EXPECT_TRUE(std::filesystem::exists(test_dir_ / "runtime_config_versions.json"));
+    EXPECT_TRUE(std::filesystem::exists(test_dir_ / "runtime_config_history.json"));
+
+    {
+        evoclaw::facade::EvoClawFacade facade2(config);
+        facade2.initialize();
+
+        auto executor2 = std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config(agent_id, "executor", {"execute"}));
+        facade2.register_agent(executor2);
+
+        const auto version_after_json = facade2.get_agent_runtime_version(agent_id);
+        ASSERT_TRUE(version_after_json.contains("version"));
+        EXPECT_EQ(version_after_json["version"].get<std::uint64_t>(), version_before);
+
+        const auto history_after = facade2.get_agent_runtime_history(agent_id);
+        ASSERT_TRUE(history_after.is_array());
+        ASSERT_EQ(history_after.size(), history_before.size());
+        EXPECT_EQ(history_after, history_before);
+    }
+}
+
 
 TEST_F(IntegrationTest, ValidatePatchSchemaRejectsUnknownFields) {
     std::string reason;

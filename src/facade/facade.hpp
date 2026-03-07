@@ -88,6 +88,10 @@ public:
     void clear_expired_snapshots(std::chrono::seconds max_age);
     void save_evolution_history() const;
     void load_evolution_history();
+    void save_runtime_config_versions() const;
+    void load_runtime_config_versions();
+    void save_runtime_config_history() const;
+    void load_runtime_config_history();
     void clear_old_evolution_history(std::size_t keep_last);
     [[nodiscard]] bool verify_event_log() const;
 

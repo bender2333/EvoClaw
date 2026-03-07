@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -13,9 +16,38 @@ namespace {
 
 using json = nlohmann::json;
 constexpr const char* kMatrixStateFileName = "capability_matrix.json";
+constexpr const char* kRuntimeConfigVersionsFileName = "runtime_config_versions.json";
+constexpr const char* kRuntimeConfigHistoryFileName = "runtime_config_history.json";
 
 std::filesystem::path matrix_state_path(const std::filesystem::path& log_dir) {
     return log_dir / kMatrixStateFileName;
+}
+
+std::filesystem::path runtime_config_versions_path(const std::filesystem::path& log_dir) {
+    return log_dir / kRuntimeConfigVersionsFileName;
+}
+
+std::filesystem::path runtime_config_history_path(const std::filesystem::path& log_dir) {
+    return log_dir / kRuntimeConfigHistoryFileName;
+}
+
+std::optional<Timestamp> parse_timestamp_string(const std::string& value) {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    std::tm tm{};
+    std::istringstream stream(value);
+    stream >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (stream.fail()) {
+        return std::nullopt;
+    }
+
+    const std::time_t time_value = std::mktime(&tm);
+    if (time_value < 0) {
+        return std::nullopt;
+    }
+    return std::chrono::system_clock::from_time_t(time_value);
 }
 
 std::string tension_type_to_string(const evolution::TensionType type) {
@@ -125,6 +157,8 @@ void EvoClawFacade::initialize() {
 
     load_snapshots();
     load_evolution_history();
+    load_runtime_config_versions();
+    load_runtime_config_history();
     initialized_ = true;
 }
 
@@ -530,6 +564,8 @@ void EvoClawFacade::save_state() const {
     router_->save_matrix(matrix_state_path(config_.log_dir));
     save_snapshots();
     save_evolution_history();
+    save_runtime_config_versions();
+    save_runtime_config_history();
 }
 
 void EvoClawFacade::trigger_evolution() {
@@ -1336,6 +1372,142 @@ void EvoClawFacade::load_evolution_history() {
         }
         if (!evolution_history_.empty()) {
             last_evolution_report_ = evolution_history_.back();
+        }
+    } catch (const std::exception&) {
+        // ignore parse errors
+    }
+}
+
+void EvoClawFacade::save_runtime_config_versions() const {
+    const auto versions_path = runtime_config_versions_path(config_.log_dir);
+    nlohmann::json data = nlohmann::json::object();
+    for (const auto& [agent_id, version] : runtime_config_versions_) {
+        data[agent_id] = version;
+    }
+
+    std::ofstream ofs(versions_path);
+    if (ofs) {
+        ofs << data.dump(2);
+    }
+}
+
+void EvoClawFacade::load_runtime_config_versions() {
+    const auto versions_path = runtime_config_versions_path(config_.log_dir);
+    if (!std::filesystem::exists(versions_path)) {
+        return;
+    }
+    std::ifstream ifs(versions_path);
+    if (!ifs) {
+        return;
+    }
+
+    try {
+        const auto parsed = nlohmann::json::parse(ifs);
+        if (!parsed.is_object()) {
+            return;
+        }
+
+        runtime_config_versions_.clear();
+        for (const auto& [agent_id, value] : parsed.items()) {
+            std::uint64_t version = 0;
+            if (value.is_number_unsigned()) {
+                version = value.get<std::uint64_t>();
+            } else if (value.is_number_integer()) {
+                const auto signed_version = value.get<std::int64_t>();
+                if (signed_version < 0) {
+                    continue;
+                }
+                version = static_cast<std::uint64_t>(signed_version);
+            } else {
+                continue;
+            }
+            runtime_config_versions_[agent_id] = version;
+        }
+    } catch (const std::exception&) {
+        // ignore parse errors
+    }
+}
+
+void EvoClawFacade::save_runtime_config_history() const {
+    const auto history_path = runtime_config_history_path(config_.log_dir);
+    nlohmann::json data = nlohmann::json::array();
+    for (const auto& record : runtime_config_history_) {
+        data.push_back({
+            {"agent_id", record.agent_id},
+            {"version", record.version},
+            {"proposal_id", record.proposal_id},
+            {"before", record.before},
+            {"after", record.after},
+            {"diff", record.diff},
+            {"changed_at", timestamp_to_string(record.changed_at)}
+        });
+    }
+
+    std::ofstream ofs(history_path);
+    if (ofs) {
+        ofs << data.dump(2);
+    }
+}
+
+void EvoClawFacade::load_runtime_config_history() {
+    const auto history_path = runtime_config_history_path(config_.log_dir);
+    if (!std::filesystem::exists(history_path)) {
+        return;
+    }
+    std::ifstream ifs(history_path);
+    if (!ifs) {
+        return;
+    }
+
+    try {
+        const auto parsed = nlohmann::json::parse(ifs);
+        if (!parsed.is_array()) {
+            return;
+        }
+
+        runtime_config_history_.clear();
+        for (const auto& item : parsed) {
+            if (!item.is_object()) {
+                continue;
+            }
+            if (!item.contains("agent_id") || !item["agent_id"].is_string()) {
+                continue;
+            }
+            if (!item.contains("version")) {
+                continue;
+            }
+            if (!item.contains("changed_at") || !item["changed_at"].is_string()) {
+                continue;
+            }
+
+            std::uint64_t version = 0;
+            const auto& version_value = item["version"];
+            if (version_value.is_number_unsigned()) {
+                version = version_value.get<std::uint64_t>();
+            } else if (version_value.is_number_integer()) {
+                const auto signed_version = version_value.get<std::int64_t>();
+                if (signed_version < 0) {
+                    continue;
+                }
+                version = static_cast<std::uint64_t>(signed_version);
+            } else {
+                continue;
+            }
+
+            const auto changed_at = parse_timestamp_string(item["changed_at"].get<std::string>());
+            if (!changed_at.has_value()) {
+                continue;
+            }
+
+            RuntimeConfigVersionRecord record;
+            record.agent_id = item["agent_id"].get<std::string>();
+            record.version = version;
+            record.proposal_id = item.value("proposal_id", std::string());
+            record.before = item.contains("before") ? item["before"] : nlohmann::json::object();
+            record.after = item.contains("after") ? item["after"] : nlohmann::json::object();
+            record.diff = item.contains("diff") ? item["diff"] : nlohmann::json::object();
+            record.changed_at = *changed_at;
+            runtime_config_history_.push_back(std::move(record));
         }
     } catch (const std::exception&) {
         // ignore parse errors
