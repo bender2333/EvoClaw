@@ -26,6 +26,10 @@ public:
     void start();
     void start_async();
     void stop();
+    void handle_runtime_config_version(const httplib::Request& req, httplib::Response& res);
+    void handle_runtime_config_history(const httplib::Request& req, httplib::Response& res);
+    void handle_runtime_config_diff(const httplib::Request& req, httplib::Response& res);
+    void handle_runtime_config_history_prune(const httplib::Request& req, httplib::Response& res);
 
 private:
     struct SseClient {

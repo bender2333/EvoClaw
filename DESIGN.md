@@ -1038,7 +1038,31 @@ struct RuntimeConfigVersionRecord {
 - 裁剪后调用 `save_state()`，落盘文件只保存裁剪后的 history
 - `runtime_config_versions.json` 仍保留最新 version 计数，不回退
 
-### 4.10 测试要求
+### 4.10 Server API 暴露
+在 `server` 层暴露 runtime config 相关 REST 接口：
+
+- `GET /api/runtime-config/version?agent_id=<id>`
+  - 返回 `facade.get_agent_runtime_version(agent_id)`
+- `GET /api/runtime-config/history?agent_id=<id>`
+  - 返回 `facade.get_agent_runtime_history(agent_id)`
+- `GET /api/runtime-config/diff?agent_id=<id>&from_version=<n>&to_version=<n>`
+  - 返回 `facade.get_agent_runtime_diff(agent_id, from_version, to_version)`
+- `POST /api/runtime-config/history/prune`
+  - body: `{ "keep_last_per_agent": 2 }`
+  - 调用 `clear_old_runtime_config_history()` 后 `save_state()`
+  - 返回裁剪后的 runtime status 摘要
+
+约束：
+- 参数校验失败返回 `400`
+- facade 返回 `{"error":"agent_not_found"...}` / `{"error":"version_not_found"...}` 时：
+  - 查询类接口返回 `404`
+- `prune` 成功返回 `200`，包含：
+  - `ok: true`
+  - `keep_last_per_agent`
+  - `runtime_config`（来自最新 `get_status()` 的摘要）
+- 不在 server 层复制业务逻辑，只做参数解析、错误映射、调用 facade
+
+### 4.11 测试要求
 - patch 成功后 version 递增
 - history 能反映 before/after/diff
 - rollback 产生新版本记录
@@ -1047,3 +1071,4 @@ struct RuntimeConfigVersionRecord {
 - 裁剪后每个 agent 只保留最近 N 条 history
 - 裁剪后 current_version 不回退
 - 裁剪后对已丢失版本做 diff 查询返回 `version_not_found`
+- server API 能正确返回 version/history/diff/prune 结果与 HTTP status

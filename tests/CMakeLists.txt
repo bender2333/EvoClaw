@@ -29,6 +29,7 @@ add_executable(evoclaw_test
     test_entropy.cpp
     test_integration.cpp
     test_matrix_persistence.cpp
+    test_server_runtime_config_api.cpp
 )
 
 target_link_libraries(evoclaw_test PRIVATE evoclaw_core GTest::gtest_main)

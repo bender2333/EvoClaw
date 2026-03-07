@@ -4,6 +4,7 @@
 #include "server/dashboard.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cctype>
 #include <cstdio>
@@ -12,6 +13,7 @@
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -33,6 +35,57 @@ json build_error(const std::string& message) {
         {"ok", false},
         {"error", message}
     };
+}
+
+std::optional<std::uint64_t> parse_uint64_param(const std::string& value) {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    std::uint64_t parsed = 0;
+    const char* begin = value.data();
+    const char* end = begin + value.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+    if (ec != std::errc() || ptr != end) {
+        return std::nullopt;
+    }
+
+    return parsed;
+}
+
+std::optional<std::size_t> parse_non_negative_size_t(const json& value) {
+    std::uint64_t parsed = 0;
+    if (value.is_number_unsigned()) {
+        parsed = value.get<std::uint64_t>();
+    } else if (value.is_number_integer()) {
+        const auto signed_value = value.get<std::int64_t>();
+        if (signed_value < 0) {
+            return std::nullopt;
+        }
+        parsed = static_cast<std::uint64_t>(signed_value);
+    } else {
+        return std::nullopt;
+    }
+
+    if (parsed > std::numeric_limits<std::size_t>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(parsed);
+}
+
+int runtime_config_query_status(const json& payload) {
+    if (!payload.contains("error") || !payload["error"].is_string()) {
+        return 200;
+    }
+
+    const auto error = payload["error"].get<std::string>();
+    if (error == "agent_not_found" || error == "version_not_found") {
+        return 404;
+    }
+    if (error == "invalid_version_range") {
+        return 400;
+    }
+    return 400;
 }
 
 std::string event_message(const json& event) {
@@ -458,6 +511,22 @@ void EvoClawServer::setup_routes() {
         }
     });
 
+    server_.Get("/api/runtime-config/version", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_runtime_config_version(req, res);
+    });
+
+    server_.Get("/api/runtime-config/history", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_runtime_config_history(req, res);
+    });
+
+    server_.Get("/api/runtime-config/diff", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_runtime_config_diff(req, res);
+    });
+
+    server_.Post("/api/runtime-config/history/prune", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_runtime_config_history_prune(req, res);
+    });
+
     server_.Get("/api/events", [this](const httplib::Request&, httplib::Response& res) {
         json payload;
         payload["events"] = json::array();
@@ -542,6 +611,106 @@ void EvoClawServer::setup_routes() {
                 client->cv.notify_all();
             });
     });
+}
+
+void EvoClawServer::handle_runtime_config_version(const httplib::Request& req, httplib::Response& res) {
+    if (!req.has_param("agent_id") || req.get_param_value("agent_id").empty()) {
+        set_json_response(res, build_error("Query parameter 'agent_id' is required"), 400);
+        return;
+    }
+
+    try {
+        const auto payload = facade_.get_agent_runtime_version(req.get_param_value("agent_id"));
+        set_json_response(res, payload, runtime_config_query_status(payload));
+    } catch (const std::exception& ex) {
+        set_json_response(res, build_error(ex.what()), 500);
+    }
+}
+
+void EvoClawServer::handle_runtime_config_history(const httplib::Request& req, httplib::Response& res) {
+    if (!req.has_param("agent_id") || req.get_param_value("agent_id").empty()) {
+        set_json_response(res, build_error("Query parameter 'agent_id' is required"), 400);
+        return;
+    }
+
+    try {
+        const auto payload = facade_.get_agent_runtime_history(req.get_param_value("agent_id"));
+        set_json_response(res, payload, runtime_config_query_status(payload));
+    } catch (const std::exception& ex) {
+        set_json_response(res, build_error(ex.what()), 500);
+    }
+}
+
+void EvoClawServer::handle_runtime_config_diff(const httplib::Request& req, httplib::Response& res) {
+    if (!req.has_param("agent_id") || req.get_param_value("agent_id").empty()) {
+        set_json_response(res, build_error("Query parameter 'agent_id' is required"), 400);
+        return;
+    }
+    if (!req.has_param("from_version")) {
+        set_json_response(res, build_error("Query parameter 'from_version' is required"), 400);
+        return;
+    }
+    if (!req.has_param("to_version")) {
+        set_json_response(res, build_error("Query parameter 'to_version' is required"), 400);
+        return;
+    }
+
+    const auto from_version = parse_uint64_param(req.get_param_value("from_version"));
+    if (!from_version.has_value()) {
+        set_json_response(res, build_error("Query parameter 'from_version' must be a non-negative integer"), 400);
+        return;
+    }
+
+    const auto to_version = parse_uint64_param(req.get_param_value("to_version"));
+    if (!to_version.has_value()) {
+        set_json_response(res, build_error("Query parameter 'to_version' must be a non-negative integer"), 400);
+        return;
+    }
+
+    try {
+        const auto payload = facade_.get_agent_runtime_diff(
+            req.get_param_value("agent_id"),
+            *from_version,
+            *to_version);
+        set_json_response(res, payload, runtime_config_query_status(payload));
+    } catch (const std::exception& ex) {
+        set_json_response(res, build_error(ex.what()), 500);
+    }
+}
+
+void EvoClawServer::handle_runtime_config_history_prune(const httplib::Request& req, httplib::Response& res) {
+    json body;
+    try {
+        body = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+        set_json_response(res, build_error("Invalid JSON body"), 400);
+        return;
+    }
+
+    if (!body.contains("keep_last_per_agent")) {
+        set_json_response(res, build_error("Field 'keep_last_per_agent' is required"), 400);
+        return;
+    }
+
+    const auto keep_last_per_agent = parse_non_negative_size_t(body["keep_last_per_agent"]);
+    if (!keep_last_per_agent.has_value()) {
+        set_json_response(res, build_error("Field 'keep_last_per_agent' must be a non-negative integer"), 400);
+        return;
+    }
+
+    try {
+        facade_.clear_old_runtime_config_history(*keep_last_per_agent);
+        facade_.save_state();
+
+        const auto status = facade_.get_status();
+        set_json_response(res, {
+            {"ok", true},
+            {"keep_last_per_agent", *keep_last_per_agent},
+            {"runtime_config", status.value("runtime_config", json::object())}
+        });
+    } catch (const std::exception& ex) {
+        set_json_response(res, build_error(ex.what()), 500);
+    }
 }
 
 void EvoClawServer::broadcast_event(const nlohmann::json& event) {
