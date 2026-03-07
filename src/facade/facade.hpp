@@ -60,6 +60,8 @@ public:
     [[nodiscard]] nlohmann::json get_zone_status() const;
     [[nodiscard]] nlohmann::json get_pattern_status() const;
     [[nodiscard]] nlohmann::json get_entropy_status() const;
+    [[nodiscard]] nlohmann::json get_evolution_history() const;
+    [[nodiscard]] nlohmann::json get_agent_evolution_stats(const AgentId& agent_id) const;
     [[nodiscard]] nlohmann::json get_agent_runtime_config(const AgentId& agent_id) const;
     bool rollback_proposal(const std::string& proposal_id, std::string* reason = nullptr);
     [[nodiscard]] static bool validate_patch_schema(const nlohmann::json& patch, std::string* reason = nullptr);
@@ -96,6 +98,7 @@ private:
     };
 
     std::unordered_map<std::string, RollbackSnapshot> rollback_snapshots_;
+    std::vector<nlohmann::json> evolution_history_;
     nlohmann::json last_evolution_report_;
     EventCallback event_callback_;
     mutable std::mutex event_callback_mutex_;

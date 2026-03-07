@@ -567,6 +567,7 @@ nlohmann::json EvoClawFacade::get_status() const {
         {"org_log_entries", org_entries},
         {"event_log_integrity", (event_log_ ? event_log_->verify_integrity() : true)},
         {"evolution", {{"last_cycle", last_evolution_report_}}},
+        {"rollback_snapshots", list_rollback_snapshots()},
         {"zones", get_zone_status()},
         {"patterns", get_pattern_status()},
         {"entropy", get_entropy_status()}
@@ -920,6 +921,10 @@ void EvoClawFacade::run_evolution_cycle() {
     }
 
     last_evolution_report_ = std::move(report);
+    evolution_history_.push_back(last_evolution_report_);
+    if (evolution_history_.size() > 100U) {
+        evolution_history_.erase(evolution_history_.begin());
+    }
 
     emit_event({
         {"event", "evolution_completed"},
@@ -1166,6 +1171,54 @@ nlohmann::json EvoClawFacade::get_pattern_status() const {
         (void)compiled_pattern;
     }
     return compiler_->status();
+}
+
+nlohmann::json EvoClawFacade::get_evolution_history() const {
+    return evolution_history_;
+}
+
+nlohmann::json EvoClawFacade::get_agent_evolution_stats(const AgentId& agent_id) const {
+    int total_proposals = 0;
+    int applied_proposals = 0;
+    int rejected_proposals = 0;
+    int rollback_count = 0;
+    double total_improvement = 0.0;
+    double best_improvement = 0.0;
+
+    for (const auto& report : evolution_history_) {
+        const auto proposals = report.value("proposals", nlohmann::json::array());
+        for (const auto& p : proposals) {
+            if (p.value("target_agent", "") != agent_id) {
+                continue;
+            }
+            ++total_proposals;
+            if (p.value("applied", false)) {
+                ++applied_proposals;
+                const auto ab = p.value("ab_test", nlohmann::json::object());
+                const double imp = ab.value("improvement", 0.0);
+                total_improvement += imp;
+                if (imp > best_improvement) {
+                    best_improvement = imp;
+                }
+            } else {
+                ++rejected_proposals;
+            }
+            if (p.value("rollback_triggered", false)) {
+                ++rollback_count;
+            }
+        }
+    }
+
+    return {
+        {"agent_id", agent_id},
+        {"total_proposals", total_proposals},
+        {"applied_proposals", applied_proposals},
+        {"rejected_proposals", rejected_proposals},
+        {"rollback_count", rollback_count},
+        {"total_improvement", total_improvement},
+        {"best_improvement", best_improvement},
+        {"average_improvement", applied_proposals > 0 ? total_improvement / applied_proposals : 0.0}
+    };
 }
 
 nlohmann::json EvoClawFacade::get_entropy_status() const {
