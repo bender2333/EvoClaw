@@ -345,8 +345,80 @@ inline constexpr const char* kDashboardHtml = R"html(
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 0.8rem;
       line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .runtime-diff-text {
+      margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
+      color: inherit;
+      font: inherit;
+    }
+
+    .runtime-diff-structured {
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .runtime-diff-entry {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0f192f;
+      padding: 0.55rem;
+    }
+
+    .runtime-diff-field {
+      margin-bottom: 0.45rem;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #ecf0fc;
+    }
+
+    .runtime-diff-change-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 0.45rem;
+    }
+
+    .runtime-diff-change {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0c1529;
+      padding: 0.45rem;
+    }
+
+    .runtime-diff-change.before {
+      border-color: #4b5f89;
+    }
+
+    .runtime-diff-change.after {
+      border-color: #2f6d58;
+    }
+
+    .runtime-diff-change-label {
+      font-size: 0.68rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 0.25rem;
+    }
+
+    .runtime-diff-change-value {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #d6ddf1;
+      font: inherit;
+    }
+
+    .runtime-diff-empty-state,
+    .runtime-diff-unavailable-state {
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 0.55rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      background: #0f192f;
     }
 
     .footer {
@@ -477,7 +549,9 @@ inline constexpr const char* kDashboardHtml = R"html(
           </div>
         </form>
         <p class="runtime-inline-message" id="runtime-diff-message"></p>
-        <pre class="runtime-diff-output" id="runtime-diff-output">Diff will appear here after compare.</pre>
+        <div class="runtime-diff-output" id="runtime-diff-output">
+          <pre class="runtime-diff-text">Diff will appear here after compare.</pre>
+        </div>
       </section>
     </main>
 
@@ -500,8 +574,10 @@ inline constexpr const char* kDashboardHtml = R"html(
         fromVersion: '0',
         toVersion: '0',
         diffOutput: 'Diff will appear here after compare.',
+        diffPayload: null,
         diffMessage: '',
         diffError: false,
+        diffUnavailable: false,
         diffLoading: false
       }
     };
@@ -536,7 +612,16 @@ inline constexpr const char* kDashboardHtml = R"html(
     };
 
     const runtimeDiffIdleOutput = 'Diff will appear here after compare.';
-    const runtimeDiffUnavailableOutput = 'Diff unavailable for selected versions.';
+    const runtimeDiffNoDifferencesOutput = 'No runtime config differences between selected versions.';
+    const runtimeDiffUnavailableOutput = 'Runtime diff unavailable: selected versions are missing or pruned from retained history.';
+    const runtimeDiffRootFieldPathMap = Object.freeze({
+      module_id: 'contract.module_id',
+      version: 'contract.version',
+      success_rate_threshold: 'contract.success_rate_threshold',
+      estimated_cost_token: 'contract.estimated_cost_token',
+      intent_tags: 'contract.intent_tags',
+      required_tools: 'contract.required_tools'
+    });
 
     function errorDetail(err) {
       if (err && err.payload && typeof err.payload.error === 'string' && err.payload.error) {
@@ -606,11 +691,143 @@ inline constexpr const char* kDashboardHtml = R"html(
       return String(text).split('\n').map((line) => `${indent}${line}`).join('\n');
     }
 
+    function isRuntimeDiffObject(value) {
+      return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+    }
+
+    function normalizeRuntimeDiffRootKey(key) {
+      if (Object.prototype.hasOwnProperty.call(runtimeDiffRootFieldPathMap, key)) {
+        return runtimeDiffRootFieldPathMap[key];
+      }
+      return key;
+    }
+
+    function collectStructuredRuntimeDiffEntries(diffNode, pathParts, entries) {
+      if (!isRuntimeDiffObject(diffNode)) {
+        return false;
+      }
+
+      const hasBefore = Object.prototype.hasOwnProperty.call(diffNode, 'before');
+      const hasAfter = Object.prototype.hasOwnProperty.call(diffNode, 'after');
+      if (hasBefore && hasAfter) {
+        if (pathParts.length === 0) {
+          return false;
+        }
+        entries.push({
+          fieldPath: pathParts.join('.'),
+          before: diffNode.before,
+          after: diffNode.after
+        });
+        return true;
+      }
+
+      const keys = Object.keys(diffNode);
+      if (keys.length === 0) {
+        return false;
+      }
+
+      let structured = true;
+      for (const key of keys) {
+        const nextPath = pathParts.concat(pathParts.length === 0 ? normalizeRuntimeDiffRootKey(key) : key);
+        if (!collectStructuredRuntimeDiffEntries(diffNode[key], nextPath, entries)) {
+          structured = false;
+        }
+      }
+      return structured;
+    }
+
+    function getStructuredRuntimeDiffEntries(diffPayload) {
+      if (!isRuntimeDiffObject(diffPayload)) {
+        return null;
+      }
+
+      if (Object.keys(diffPayload).length === 0) {
+        return [];
+      }
+
+      const entries = [];
+      const structured = collectStructuredRuntimeDiffEntries(diffPayload, [], entries);
+      if (!structured || entries.length === 0) {
+        return null;
+      }
+
+      entries.sort((left, right) => left.fieldPath.localeCompare(right.fieldPath));
+      return entries;
+    }
+
+    function createRuntimeDiffValueBlock(label, value, modifierClass) {
+      const block = document.createElement('div');
+      block.className = `runtime-diff-change ${modifierClass}`;
+
+      const valueLabel = document.createElement('div');
+      valueLabel.className = 'runtime-diff-change-label';
+      valueLabel.textContent = label;
+      block.appendChild(valueLabel);
+
+      const renderedValue = document.createElement('pre');
+      renderedValue.className = 'runtime-diff-change-value';
+      renderedValue.textContent = formatJsonValue(value);
+      block.appendChild(renderedValue);
+
+      return block;
+    }
+
+    function renderRuntimeDiffOutput() {
+      const inspector = state.runtimeInspector;
+      refs.runtimeDiffOutput.innerHTML = '';
+
+      if (inspector.diffUnavailable) {
+        const unavailable = document.createElement('div');
+        unavailable.className = 'runtime-diff-unavailable-state';
+        unavailable.textContent = runtimeDiffUnavailableOutput;
+        refs.runtimeDiffOutput.appendChild(unavailable);
+        return;
+      }
+
+      const structuredEntries = getStructuredRuntimeDiffEntries(inspector.diffPayload);
+      if (Array.isArray(structuredEntries)) {
+        if (structuredEntries.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'runtime-diff-empty-state';
+          empty.textContent = runtimeDiffNoDifferencesOutput;
+          refs.runtimeDiffOutput.appendChild(empty);
+          return;
+        }
+
+        const structured = document.createElement('div');
+        structured.className = 'runtime-diff-structured';
+        for (const entry of structuredEntries) {
+          const entryNode = document.createElement('div');
+          entryNode.className = 'runtime-diff-entry';
+
+          const field = document.createElement('div');
+          field.className = 'runtime-diff-field';
+          field.textContent = entry.fieldPath;
+          entryNode.appendChild(field);
+
+          const valueGrid = document.createElement('div');
+          valueGrid.className = 'runtime-diff-change-grid';
+          valueGrid.appendChild(createRuntimeDiffValueBlock('Before', entry.before, 'before'));
+          valueGrid.appendChild(createRuntimeDiffValueBlock('After', entry.after, 'after'));
+          entryNode.appendChild(valueGrid);
+
+          structured.appendChild(entryNode);
+        }
+        refs.runtimeDiffOutput.appendChild(structured);
+        return;
+      }
+
+      const fallbackText = document.createElement('pre');
+      fallbackText.className = 'runtime-diff-text';
+      fallbackText.textContent = inspector.diffOutput;
+      refs.runtimeDiffOutput.appendChild(fallbackText);
+    }
+
     function formatRuntimeDiff(diffPayload) {
-      if (diffPayload && typeof diffPayload === 'object' && !Array.isArray(diffPayload)) {
+      if (isRuntimeDiffObject(diffPayload)) {
         const keys = Object.keys(diffPayload);
         if (keys.length === 0) {
-          return 'No runtime config differences between selected versions.';
+          return runtimeDiffNoDifferencesOutput;
         }
 
         const sections = [];
@@ -761,7 +978,7 @@ ${indentLines(formatJsonValue(change), '  ')}`);
 
       refs.runtimeHistoryList.innerHTML = '';
       refs.runtimeHistoryEmpty.style.display = 'none';
-      refs.runtimeDiffOutput.textContent = inspector.diffOutput;
+      renderRuntimeDiffOutput();
       refs.runtimeFromVersion.value = inspector.fromVersion;
       refs.runtimeToVersion.value = inspector.toVersion;
       refs.runtimeCompareBtn.disabled = !selectedAgentId || inspector.diffLoading;
@@ -869,8 +1086,10 @@ ${indentLines(formatJsonValue(change), '  ')}`);
       inspector.selectedAgentId = agentId;
       if (!wasSameAgent) {
         inspector.diffOutput = runtimeDiffIdleOutput;
+        inspector.diffPayload = null;
         inspector.diffMessage = '';
         inspector.diffError = false;
+        inspector.diffUnavailable = false;
 
         const runtimeSummary = state.runtimeConfigByAgent[agentId] || {};
         setCompareVersionsFromTo(runtimeSummary.current_version);
@@ -928,8 +1147,10 @@ ${indentLines(formatJsonValue(change), '  ')}`);
       if (!exists) {
         state.runtimeInspector.selectedAgentId = null;
         state.runtimeInspector.diffOutput = runtimeDiffIdleOutput;
+        state.runtimeInspector.diffPayload = null;
         state.runtimeInspector.diffMessage = '';
         state.runtimeInspector.diffError = false;
+        state.runtimeInspector.diffUnavailable = false;
         state.runtimeInspector.diffLoading = false;
       }
       renderRuntimeInspector();
@@ -1088,6 +1309,7 @@ ${indentLines(formatJsonValue(change), '  ')}`);
       state.runtimeInspector.diffLoading = true;
       state.runtimeInspector.diffMessage = `Comparing runtime config versions ${fromVersion} -> ${toVersion}...`;
       state.runtimeInspector.diffError = false;
+      state.runtimeInspector.diffUnavailable = false;
       renderRuntimeInspector();
 
       try {
@@ -1097,9 +1319,12 @@ ${indentLines(formatJsonValue(change), '  ')}`);
           to_version: String(toVersion)
         });
         const payload = await getJson(`/api/runtime-config/diff?${query.toString()}`);
-        state.runtimeInspector.diffOutput = formatRuntimeDiff(payload.diff || {});
+        const diffPayload = Object.prototype.hasOwnProperty.call(payload, 'diff') ? payload.diff : {};
+        state.runtimeInspector.diffPayload = diffPayload;
+        state.runtimeInspector.diffOutput = formatRuntimeDiff(diffPayload);
         state.runtimeInspector.diffMessage = `Compare succeeded: ${fromVersion} -> ${toVersion}.`;
         state.runtimeInspector.diffError = false;
+        state.runtimeInspector.diffUnavailable = false;
       } catch (err) {
         let message = `Runtime diff request failed: ${errorDetail(err)}.`;
         if (err && err.payload && err.payload.error === 'version_not_found') {
@@ -1113,9 +1338,11 @@ ${indentLines(formatJsonValue(change), '  ')}`);
             message = 'Runtime diff failed: version_not_found.';
           }
         }
+        state.runtimeInspector.diffPayload = null;
         state.runtimeInspector.diffOutput = runtimeDiffUnavailableOutput;
         state.runtimeInspector.diffMessage = message;
         state.runtimeInspector.diffError = true;
+        state.runtimeInspector.diffUnavailable = true;
         appendEvent({
           event: 'runtime_config_diff_failed',
           message: `${message} [agent_id=${selectedAgentId}, from_version=${fromVersion}, to_version=${toVersion}]`,

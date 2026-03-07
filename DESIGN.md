@@ -1158,3 +1158,35 @@ Dashboard 接入 runtime config API，先做轻量可观测性与治理入口，
 - dashboard HTML 包含可点击/交互增强相关文案或元素 id
 - 包含 history item / compare / diff output 的增强标识
 - 全量测试保持通过
+
+### 4.18 Dashboard slice 4：Runtime Diff 结构化高亮
+目标：把 runtime diff 从“文本可读”提升为“审计友好”。
+
+展示目标：
+- diff 面板按字段分组展示变更：
+  - top-level fields
+  - `contract.*` 子字段
+- 每个字段展示：
+  - field name
+  - before
+  - after
+- 仍保留 preformatted / text-first 风格，不引入前端框架
+- 若 diff 为空：
+  - 显示明确 empty-state：`No runtime config differences between selected versions.`
+- 若 diff unavailable / pruned:
+  - 显示更明确状态文案，而不是模糊失败提示
+
+交互要求：
+- compare 成功后，优先渲染结构化 diff 卡片/块
+- 若 payload 不是 object 或结构不规则，则回退到当前文本格式化展示
+- `contract.version`、`contract.success_rate_threshold` 等子字段应在 UI 中以完整路径显示，避免歧义
+
+约束：
+- 不改 server/facade diff API 协议
+- 仍优先修改 `dashboard.hpp`
+- 测试继续采用静态 HTML 断言，不引入浏览器自动化
+
+### 4.19 Dashboard slice 4 测试要求
+- dashboard HTML 包含结构化 diff 区域或样式标识
+- 包含 before/after 展示文案或元素 id/class
+- 全量测试保持通过
