@@ -159,6 +159,7 @@ void EvoClawFacade::register_agent(std::shared_ptr<agent::Agent> agent, const zo
         zone_manager_->assign_zone(agent_id, zone);
     }
     agents_[agent_id] = std::move(agent);
+    runtime_config_versions_.try_emplace(agent_id, 0);
 
     event_log::Event event;
     event.type = event_log::EventType::AGENT_SPAWN;
@@ -780,6 +781,7 @@ void EvoClawFacade::run_evolution_cycle() {
                 } else {
                     runtime_patch_applied = true;
                     config_after = target_it->second->runtime_config();
+                    record_runtime_config_version(proposal.target_agent, proposal.id, config_before, config_after);
 
                     rollback_snapshots_[proposal.id] = RollbackSnapshot{
                         proposal.target_agent,
@@ -976,6 +978,201 @@ nlohmann::json EvoClawFacade::get_agent_runtime_config(const AgentId& agent_id) 
     return it->second->runtime_config();
 }
 
+nlohmann::json EvoClawFacade::compute_runtime_config_diff(const nlohmann::json& before,
+                                                          const nlohmann::json& after) {
+    nlohmann::json diff = nlohmann::json::object();
+    const auto add_if_changed = [&](const std::string& key,
+                                    const nlohmann::json& before_value,
+                                    const nlohmann::json& after_value) {
+        if (before_value != after_value) {
+            diff[key] = {
+                {"before", before_value},
+                {"after", after_value}
+            };
+        }
+    };
+    const auto value_or_null = [](const nlohmann::json& obj, const char* key) -> nlohmann::json {
+        if (obj.is_object() && obj.contains(key)) {
+            return obj[key];
+        }
+        return nullptr;
+    };
+
+    static const std::vector<std::string> top_level_fields = {
+        "id",
+        "role",
+        "system_prompt",
+        "temperature"
+    };
+    for (const auto& field : top_level_fields) {
+        add_if_changed(field, value_or_null(before, field.c_str()), value_or_null(after, field.c_str()));
+    }
+
+    static const std::vector<std::string> contract_fields = {
+        "module_id",
+        "version",
+        "success_rate_threshold",
+        "estimated_cost_token",
+        "intent_tags",
+        "required_tools"
+    };
+    const auto& before_contract =
+        (before.is_object() && before.contains("contract") && before["contract"].is_object())
+            ? before["contract"]
+            : nlohmann::json::object();
+    const auto& after_contract =
+        (after.is_object() && after.contains("contract") && after["contract"].is_object())
+            ? after["contract"]
+            : nlohmann::json::object();
+
+    for (const auto& field : contract_fields) {
+        add_if_changed(field,
+                       value_or_null(before_contract, field.c_str()),
+                       value_or_null(after_contract, field.c_str()));
+    }
+
+    return diff;
+}
+
+std::optional<nlohmann::json> EvoClawFacade::get_runtime_snapshot_for_version(const AgentId& agent_id,
+                                                                               const std::uint64_t version) const {
+    if (version == 0) {
+        const RuntimeConfigVersionRecord* first_record = nullptr;
+        for (const auto& record : runtime_config_history_) {
+            if (record.agent_id != agent_id) {
+                continue;
+            }
+            if (first_record == nullptr || record.version < first_record->version) {
+                first_record = &record;
+            }
+        }
+        if (first_record != nullptr) {
+            return first_record->before;
+        }
+
+        const auto agent_it = agents_.find(agent_id);
+        if (agent_it != agents_.end() && agent_it->second) {
+            return agent_it->second->runtime_config();
+        }
+        return std::nullopt;
+    }
+
+    for (const auto& record : runtime_config_history_) {
+        if (record.agent_id == agent_id && record.version == version) {
+            return record.after;
+        }
+    }
+    return std::nullopt;
+}
+
+void EvoClawFacade::record_runtime_config_version(const AgentId& agent_id,
+                                                  const std::string& proposal_id,
+                                                  const nlohmann::json& before,
+                                                  const nlohmann::json& after) {
+    const std::uint64_t next_version = runtime_config_versions_[agent_id] + 1U;
+    runtime_config_versions_[agent_id] = next_version;
+    runtime_config_history_.push_back(RuntimeConfigVersionRecord{
+        .agent_id = agent_id,
+        .version = next_version,
+        .proposal_id = proposal_id,
+        .before = before,
+        .after = after,
+        .diff = compute_runtime_config_diff(before, after),
+        .changed_at = evoclaw::now()
+    });
+}
+
+nlohmann::json EvoClawFacade::get_agent_runtime_version(const AgentId& agent_id) const {
+    const auto it = agents_.find(agent_id);
+    if (it == agents_.end() || !it->second) {
+        return nlohmann::json{{"error", "agent_not_found"}, {"agent_id", agent_id}};
+    }
+
+    const auto version_it = runtime_config_versions_.find(agent_id);
+    const std::uint64_t version = version_it != runtime_config_versions_.end() ? version_it->second : 0U;
+    return {
+        {"agent_id", agent_id},
+        {"version", version}
+    };
+}
+
+nlohmann::json EvoClawFacade::get_agent_runtime_history(const AgentId& agent_id) const {
+    const auto it = agents_.find(agent_id);
+    if (it == agents_.end() || !it->second) {
+        return nlohmann::json{{"error", "agent_not_found"}, {"agent_id", agent_id}};
+    }
+
+    nlohmann::json history = nlohmann::json::array();
+    for (const auto& record : runtime_config_history_) {
+        if (record.agent_id != agent_id) {
+            continue;
+        }
+        history.push_back({
+            {"agent_id", record.agent_id},
+            {"version", record.version},
+            {"proposal_id", record.proposal_id},
+            {"before", record.before},
+            {"after", record.after},
+            {"diff", record.diff},
+            {"changed_at", timestamp_to_string(record.changed_at)}
+        });
+    }
+    return history;
+}
+
+nlohmann::json EvoClawFacade::get_agent_runtime_diff(const AgentId& agent_id,
+                                                     const std::uint64_t from_version,
+                                                     const std::uint64_t to_version) const {
+    const auto it = agents_.find(agent_id);
+    if (it == agents_.end() || !it->second) {
+        return nlohmann::json{{"error", "agent_not_found"}, {"agent_id", agent_id}};
+    }
+    if (from_version > to_version) {
+        return nlohmann::json{
+            {"error", "invalid_version_range"},
+            {"agent_id", agent_id},
+            {"from_version", from_version},
+            {"to_version", to_version}
+        };
+    }
+
+    const auto version_it = runtime_config_versions_.find(agent_id);
+    const std::uint64_t current_version = version_it != runtime_config_versions_.end() ? version_it->second : 0U;
+    if (to_version > current_version) {
+        return nlohmann::json{
+            {"error", "version_not_found"},
+            {"agent_id", agent_id},
+            {"current_version", current_version},
+            {"requested_version", to_version}
+        };
+    }
+
+    const auto from_snapshot = get_runtime_snapshot_for_version(agent_id, from_version);
+    if (!from_snapshot.has_value()) {
+        return nlohmann::json{
+            {"error", "version_not_found"},
+            {"agent_id", agent_id},
+            {"requested_version", from_version}
+        };
+    }
+
+    const auto to_snapshot = get_runtime_snapshot_for_version(agent_id, to_version);
+    if (!to_snapshot.has_value()) {
+        return nlohmann::json{
+            {"error", "version_not_found"},
+            {"agent_id", agent_id},
+            {"requested_version", to_version}
+        };
+    }
+
+    return {
+        {"agent_id", agent_id},
+        {"from_version", from_version},
+        {"to_version", to_version},
+        {"diff", compute_runtime_config_diff(*from_snapshot, *to_snapshot)}
+    };
+}
+
 bool EvoClawFacade::validate_patch_schema(const nlohmann::json& patch, std::string* reason) {
     if (!patch.is_object()) {
         if (reason) *reason = "patch must be a JSON object";
@@ -1035,11 +1232,14 @@ bool EvoClawFacade::rollback_proposal(const std::string& proposal_id, std::strin
         return false;
     }
 
+    const nlohmann::json config_before_restore = agent_it->second->runtime_config();
     std::string restore_error;
     if (!agent_it->second->restore_runtime_config(snapshot.config_before, &restore_error)) {
         if (reason) *reason = "restore failed: " + restore_error;
         return false;
     }
+    const nlohmann::json config_after_restore = agent_it->second->runtime_config();
+    record_runtime_config_version(snapshot.agent_id, proposal_id, config_before_restore, config_after_restore);
 
     event_log::Event evt;
     evt.type = event_log::EventType::CONFIG_CHANGE;

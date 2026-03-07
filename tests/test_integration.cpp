@@ -299,6 +299,91 @@ TEST_F(IntegrationTest, RollbackSnapshotStoresAndRestoresConfig) {
     EXPECT_EQ(restored["system_prompt"], before["system_prompt"]);
 }
 
+TEST_F(IntegrationTest, RuntimeConfigVersioningTracksPatchRollbackAndDiff) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.evolver_config.kpi_decline_threshold = 0.95;
+    config.evolver_config.min_sample_size = 8;
+    config.evolver_config.confidence_threshold = 0.7;
+    config.evolver_config.max_proposals_per_cycle = 1;
+    config.evolver_config.consecutive_failures = 100;
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+
+    const std::string agent_id = "executor-versioning";
+    auto executor = std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config(agent_id, "executor", {"execute"}));
+    facade.register_agent(executor);
+
+    const auto version0 = facade.get_agent_runtime_version(agent_id);
+    ASSERT_TRUE(version0.contains("version"));
+    EXPECT_EQ(version0["version"].get<std::uint64_t>(), 0U);
+
+    for (int i = 0; i < 10; ++i) {
+        evoclaw::agent::Task task;
+        task.id = "version-kpi-" + std::to_string(i);
+        task.description = "score task";
+        task.type = evoclaw::TaskType::ROUTE;
+        task.context["intent"] = "execute";
+        task.context["critic_score"] = (i < 6) ? 0.9 : 0.8;
+        task.context["score"] = (i < 6) ? 0.9 : 0.8;
+        (void)facade.submit_task(task);
+    }
+
+    facade.trigger_evolution();
+
+    const auto status = facade.get_status();
+    const auto cycle = status["evolution"].value("last_cycle", nlohmann::json::object());
+    ASSERT_TRUE(cycle.contains("proposals"));
+
+    std::string applied_proposal_id;
+    for (const auto& proposal : cycle["proposals"]) {
+        if (proposal.value("applied", false) && proposal.value("runtime_patch_applied", false)) {
+            applied_proposal_id = proposal["id"].get<std::string>();
+            break;
+        }
+    }
+    ASSERT_FALSE(applied_proposal_id.empty());
+
+    const auto version1 = facade.get_agent_runtime_version(agent_id);
+    ASSERT_TRUE(version1.contains("version"));
+    EXPECT_EQ(version1["version"].get<std::uint64_t>(), 1U);
+
+    const auto history1 = facade.get_agent_runtime_history(agent_id);
+    ASSERT_TRUE(history1.is_array());
+    ASSERT_EQ(history1.size(), 1U);
+    EXPECT_EQ(history1[0]["version"].get<std::uint64_t>(), 1U);
+    EXPECT_EQ(history1[0]["proposal_id"].get<std::string>(), applied_proposal_id);
+    EXPECT_TRUE(history1[0].contains("diff"));
+    EXPECT_FALSE(history1[0]["diff"].empty());
+
+    const auto diff01 = facade.get_agent_runtime_diff(agent_id, 0, 1);
+    ASSERT_FALSE(diff01.contains("error"));
+    ASSERT_TRUE(diff01.contains("diff"));
+    EXPECT_TRUE(diff01["diff"].contains("system_prompt"));
+
+    std::string reason;
+    const bool rolled_back = facade.rollback_proposal(applied_proposal_id, &reason);
+    EXPECT_TRUE(rolled_back) << reason;
+
+    const auto version2 = facade.get_agent_runtime_version(agent_id);
+    ASSERT_TRUE(version2.contains("version"));
+    EXPECT_EQ(version2["version"].get<std::uint64_t>(), 2U);
+
+    const auto history2 = facade.get_agent_runtime_history(agent_id);
+    ASSERT_TRUE(history2.is_array());
+    ASSERT_EQ(history2.size(), 2U);
+    EXPECT_EQ(history2.back()["version"].get<std::uint64_t>(), 2U);
+
+    const auto diff12 = facade.get_agent_runtime_diff(agent_id, 1, 2);
+    ASSERT_FALSE(diff12.contains("error"));
+    EXPECT_TRUE(diff12["diff"].contains("system_prompt"));
+
+    const auto diff02 = facade.get_agent_runtime_diff(agent_id, 0, 2);
+    ASSERT_FALSE(diff02.contains("error"));
+    EXPECT_TRUE(diff02["diff"].empty());
+}
+
 
 TEST_F(IntegrationTest, ValidatePatchSchemaRejectsUnknownFields) {
     std::string reason;

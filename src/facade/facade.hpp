@@ -18,11 +18,13 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +41,16 @@ public:
         router::RoutingConfig router_config;
         evolution::Evolver::Config evolver_config;
         int global_token_limit = 0;
+    };
+
+    struct RuntimeConfigVersionRecord {
+        AgentId agent_id;
+        std::uint64_t version = 0;
+        std::string proposal_id;
+        nlohmann::json before;
+        nlohmann::json after;
+        nlohmann::json diff;
+        Timestamp changed_at;
     };
 
     explicit EvoClawFacade(Config config);
@@ -63,6 +75,11 @@ public:
     [[nodiscard]] nlohmann::json get_evolution_history() const;
     [[nodiscard]] nlohmann::json get_agent_evolution_stats(const AgentId& agent_id) const;
     [[nodiscard]] nlohmann::json get_agent_runtime_config(const AgentId& agent_id) const;
+    [[nodiscard]] nlohmann::json get_agent_runtime_version(const AgentId& agent_id) const;
+    [[nodiscard]] nlohmann::json get_agent_runtime_history(const AgentId& agent_id) const;
+    [[nodiscard]] nlohmann::json get_agent_runtime_diff(const AgentId& agent_id,
+                                                        std::uint64_t from_version,
+                                                        std::uint64_t to_version) const;
     bool rollback_proposal(const std::string& proposal_id, std::string* reason = nullptr);
     [[nodiscard]] static bool validate_patch_schema(const nlohmann::json& patch, std::string* reason = nullptr);
     [[nodiscard]] nlohmann::json list_rollback_snapshots() const;
@@ -107,9 +124,20 @@ private:
     mutable std::mutex event_callback_mutex_;
 
     static governance::Constitution load_constitution(const std::filesystem::path& path);
+    [[nodiscard]] static nlohmann::json compute_runtime_config_diff(const nlohmann::json& before,
+                                                                    const nlohmann::json& after);
+    [[nodiscard]] std::optional<nlohmann::json> get_runtime_snapshot_for_version(const AgentId& agent_id,
+                                                                                  std::uint64_t version) const;
+    void record_runtime_config_version(const AgentId& agent_id,
+                                       const std::string& proposal_id,
+                                       const nlohmann::json& before,
+                                       const nlohmann::json& after);
     void emit_event(nlohmann::json event);
     void run_evolution_cycle();
     void ensure_initialized() const;
+
+    std::unordered_map<AgentId, std::uint64_t> runtime_config_versions_;
+    std::vector<RuntimeConfigVersionRecord> runtime_config_history_;
 };
 
 } // namespace evoclaw::facade
