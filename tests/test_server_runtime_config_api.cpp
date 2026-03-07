@@ -381,6 +381,11 @@ TEST(DashboardHtmlTest, IncludesRuntimeConfigSummaryPruneAndInspectorControls) {
     EXPECT_NE(html.find("Inspect Runtime"), std::string::npos);
     EXPECT_NE(html.find("from_version"), std::string::npos);
     EXPECT_NE(html.find("to_version"), std::string::npos);
+    EXPECT_NE(html.find("Compare Versions"), std::string::npos);
+    EXPECT_NE(html.find("runtime-history-hint"), std::string::npos);
+    EXPECT_NE(html.find("runtime-history-entry-btn"), std::string::npos);
+    EXPECT_NE(html.find("Staged compare"), std::string::npos);
+    EXPECT_NE(html.find("formatRuntimeDiff"), std::string::npos);
     EXPECT_NE(html.find("runtime-diff-output"), std::string::npos);
     EXPECT_NE(html.find("/api/runtime-config/history?"), std::string::npos);
     EXPECT_NE(html.find("/api/runtime-config/diff?"), std::string::npos);

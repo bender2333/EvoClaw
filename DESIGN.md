@@ -1130,3 +1130,31 @@ Dashboard 接入 runtime config API，先做轻量可观测性与治理入口，
 - dashboard HTML 包含 runtime inspector 区域与 compare 控件
 - 包含 history/diff 相关标签或按钮文案
 - 保持既有 dashboard 功能与测试不回归
+
+### 4.16 Dashboard slice 3：交互打磨
+目标：把 runtime inspector 从“能用”提升到“顺手”。
+
+优化项：
+- history 条目支持点击：
+  - 点击一条时，自动将 `to_version` 设为该条 version
+  - 若存在前一个版本，则自动将 `from_version` 设为 `version - 1`
+- diff 展示增强：
+  - 若 diff 为 object，按 key/value 格式化展示
+  - 保留原始 JSON 可读性，但尽量减少“整坨 JSON”的观感负担
+- loading / error 体验：
+  - history 加载、diff compare 中按钮和提示文案更明确
+  - compare 成功后给出简短成功提示
+  - compare 失败时保留最近一次结果或明确标记 unavailable
+- inspector 状态保持：
+  - prune 后若当前选中 agent 仍存在，自动重新加载其 history
+  - status/agents refresh 不应无故清空 inspector
+
+约束：
+- 仍不引入前端框架和外部依赖
+- 保持 `dashboard.hpp` 单文件方案
+- 测试仍以静态 HTML 断言为主，不引入复杂浏览器自动化
+
+### 4.17 Dashboard slice 3 测试要求
+- dashboard HTML 包含可点击/交互增强相关文案或元素 id
+- 包含 history item / compare / diff output 的增强标识
+- 全量测试保持通过
