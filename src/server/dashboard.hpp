@@ -192,6 +192,7 @@ inline constexpr const char* kDashboardHtml = R"html(
 
     textarea,
     select,
+    input,
     button {
       width: 100%;
       border-radius: 8px;
@@ -205,6 +206,16 @@ inline constexpr const char* kDashboardHtml = R"html(
     textarea {
       resize: vertical;
       min-height: 84px;
+    }
+
+    .ops-divider {
+      border-top: 1px solid rgba(154, 160, 180, 0.25);
+      margin: 0.7rem 0;
+    }
+
+    .ops-label {
+      color: var(--muted);
+      font-size: 0.82rem;
     }
 
     .button-row {
@@ -296,6 +307,14 @@ inline constexpr const char* kDashboardHtml = R"html(
             <div class="label">Integrity</div>
             <div class="value" id="stat-integrity">-</div>
           </div>
+          <div class="stat">
+            <div class="label">Runtime Tracked Agents</div>
+            <div class="value" id="stat-runtime-tracked-agents">0</div>
+          </div>
+          <div class="stat">
+            <div class="label">Runtime History Entries</div>
+            <div class="value" id="stat-runtime-history-entries">0</div>
+          </div>
         </div>
       </section>
 
@@ -325,6 +344,12 @@ inline constexpr const char* kDashboardHtml = R"html(
             <button type="button" class="accent" id="evolve-btn">Trigger Evolution</button>
           </div>
         </form>
+        <div class="ops-divider"></div>
+        <form id="runtime-prune-form">
+          <label class="ops-label" for="keep-last-per-agent">Runtime history keep_last_per_agent</label>
+          <input id="keep-last-per-agent" type="number" min="0" step="1" value="1" />
+          <button type="submit">Prune Runtime History</button>
+        </form>
       </section>
 
       <section class="card evolution">
@@ -341,7 +366,9 @@ inline constexpr const char* kDashboardHtml = R"html(
   <script>
     const state = {
       events: [],
-      evolution: []
+      evolution: [],
+      agentsPayload: null,
+      runtimeConfigByAgent: Object.create(null)
     };
 
     const refs = {
@@ -350,6 +377,8 @@ inline constexpr const char* kDashboardHtml = R"html(
       statTasks: document.getElementById('stat-tasks'),
       statEvents: document.getElementById('stat-events'),
       statIntegrity: document.getElementById('stat-integrity'),
+      statRuntimeTrackedAgents: document.getElementById('stat-runtime-tracked-agents'),
+      statRuntimeHistoryEntries: document.getElementById('stat-runtime-history-entries'),
       integrityFooter: document.getElementById('integrity-footer'),
       eventFeed: document.getElementById('event-feed'),
       evolutionHistory: document.getElementById('evolution-history'),
@@ -357,7 +386,9 @@ inline constexpr const char* kDashboardHtml = R"html(
       taskForm: document.getElementById('task-form'),
       taskDescription: document.getElementById('task-description'),
       taskType: document.getElementById('task-type'),
-      evolveBtn: document.getElementById('evolve-btn')
+      evolveBtn: document.getElementById('evolve-btn'),
+      runtimePruneForm: document.getElementById('runtime-prune-form'),
+      keepLastPerAgent: document.getElementById('keep-last-per-agent')
     };
 
     function fmtTime(raw) {
@@ -365,6 +396,13 @@ inline constexpr const char* kDashboardHtml = R"html(
       const date = new Date(raw);
       if (Number.isNaN(date.getTime())) return String(raw);
       return date.toLocaleTimeString();
+    }
+
+    function fmtDateTime(raw) {
+      if (!raw) return '-';
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) return String(raw);
+      return date.toLocaleString();
     }
 
     function setIntegrity(ok) {
@@ -428,6 +466,10 @@ inline constexpr const char* kDashboardHtml = R"html(
       refs.agentGrid.innerHTML = '';
       const agents = (payload && payload.agents) || [];
       for (const agent of agents) {
+        const runtimeSummary = state.runtimeConfigByAgent[agent.agent_id] || {};
+        const runtimeVersion = runtimeSummary.current_version ?? '-';
+        const runtimeHistoryCount = runtimeSummary.history_count ?? 0;
+        const runtimeLatestChangedAt = fmtDateTime(runtimeSummary.latest_changed_at);
         const card = document.createElement('article');
         card.className = 'agent-card';
         card.innerHTML = `
@@ -436,6 +478,9 @@ inline constexpr const char* kDashboardHtml = R"html(
           <p class="agent-line">Version: ${agent.version || '-'}</p>
           <p class="agent-line">Intents: ${(agent.intent_tags || []).join(', ') || '-'}</p>
           <p class="agent-line">Score: ${Math.round((agent.success_rate_threshold || 0) * 100)}%</p>
+          <p class="agent-line">runtime_version: ${runtimeVersion}</p>
+          <p class="agent-line">runtime_history_count: ${runtimeHistoryCount}</p>
+          <p class="agent-line">runtime_latest_changed_at: ${runtimeLatestChangedAt}</p>
         `;
         refs.agentGrid.appendChild(card);
       }
@@ -457,6 +502,19 @@ inline constexpr const char* kDashboardHtml = R"html(
       refs.statTasks.textContent = status.org_log_entries || 0;
       setIntegrity(Boolean(status.event_log_integrity));
 
+      const runtimeConfig = status.runtime_config || {};
+      refs.statRuntimeTrackedAgents.textContent = runtimeConfig.tracked_agents || 0;
+      refs.statRuntimeHistoryEntries.textContent = runtimeConfig.history_entries || 0;
+      state.runtimeConfigByAgent = Object.create(null);
+      for (const item of runtimeConfig.agents || []) {
+        if (item && item.agent_id) {
+          state.runtimeConfigByAgent[item.agent_id] = item;
+        }
+      }
+      if (state.agentsPayload) {
+        renderAgents(state.agentsPayload);
+      }
+
       if (status.evolution && status.evolution.last_cycle && status.evolution.last_cycle.status === 'completed') {
         const cycle = status.evolution.last_cycle;
         cycle.cycle = cycle.cycle || state.evolution.length + 1;
@@ -470,7 +528,8 @@ inline constexpr const char* kDashboardHtml = R"html(
 
     async function refreshAgents() {
       const agents = await getJson('/api/agents');
-      renderAgents(agents);
+      state.agentsPayload = agents;
+      renderAgents(state.agentsPayload);
     }
 
     async function loadEventHistory() {
@@ -545,6 +604,48 @@ inline constexpr const char* kDashboardHtml = R"html(
         appendEvent({
           event: 'evolution_failed',
           message: `Evolution trigger failed: ${err.message}`,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    refs.runtimePruneForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const keepLastPerAgent = Number.parseInt(refs.keepLastPerAgent.value, 10);
+      if (!Number.isInteger(keepLastPerAgent) || keepLastPerAgent < 0) {
+        appendEvent({
+          event: 'runtime_config_prune_failed',
+          message: 'Runtime config prune failed: keep_last_per_agent must be a non-negative integer',
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+
+      try {
+        const payload = await getJson('/api/runtime-config/history/prune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            keep_last_per_agent: keepLastPerAgent
+          })
+        });
+
+        await Promise.all([refreshStatus(), refreshAgents()]);
+
+        const historyEntries = payload
+          && payload.runtime_config
+          && Number.isInteger(payload.runtime_config.history_entries)
+          ? payload.runtime_config.history_entries
+          : 'n/a';
+        appendEvent({
+          event: 'runtime_config_prune_success',
+          message: `Runtime config history pruned (keep_last_per_agent=${keepLastPerAgent}, history_entries=${historyEntries})`,
+          timestamp: new Date().toISOString()
+        });
+      } catch (err) {
+        appendEvent({
+          event: 'runtime_config_prune_failed',
+          message: `Runtime config prune failed: ${err.message}`,
           timestamp: new Date().toISOString()
         });
       }

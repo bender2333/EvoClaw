@@ -1072,3 +1072,32 @@ struct RuntimeConfigVersionRecord {
 - 裁剪后 current_version 不回退
 - 裁剪后对已丢失版本做 diff 查询返回 `version_not_found`
 - server API 能正确返回 version/history/diff/prune 结果与 HTTP status
+
+### 4.12 Dashboard 前端对接
+Dashboard 接入 runtime config API，先做轻量可观测性与治理入口，不引入复杂前端状态机。
+
+展示目标：
+- 在 agent 卡片中显示：
+  - `runtime_version`
+  - `runtime_history_count`
+  - `runtime_latest_changed_at`
+- 增加单独的 Runtime Config 面板，展示：
+  - tracked agents
+  - total history entries
+  - 说明当前 runtime history 是否已启用版本化/裁剪治理
+- 增加一个简单 prune 操作入口：
+  - 输入 `keep_last_per_agent`
+  - 调用 `POST /api/runtime-config/history/prune`
+  - 成功后刷新 status / agents / event feed 提示
+
+前端约束：
+- 优先复用 `/api/status` 中的 `runtime_config` 摘要，避免无谓逐 agent 请求
+- 不在 dashboard 首屏自动拉全量 history/diff，避免 payload 和渲染开销
+- prune 失败时写入 event feed，成功时也写入一条本地提示事件
+- 保持现有 dashboard 布局风格一致，不引入外部依赖
+
+### 4.13 Dashboard 测试要求
+- status 刷新后 runtime config 摘要能正确渲染
+- agent 卡片能显示 runtime version / history_count / latest_changed_at
+- prune 操作提交成功后能刷新页面状态
+- prune 参数非法时能在前端显示失败事件

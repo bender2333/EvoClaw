@@ -1,5 +1,6 @@
 #include "agent/executor.hpp"
 #include "facade/facade.hpp"
+#include "server/dashboard.hpp"
 #include "server/server.hpp"
 
 #include <gtest/gtest.h>
@@ -367,6 +368,17 @@ TEST_F(RuntimeConfigServerApiTest, PruneValidationErrorsReturnBuildErrorWith400)
         EXPECT_FALSE(payload.value("ok", true));
         EXPECT_TRUE(payload["error"].is_string());
     }
+}
+
+TEST(DashboardHtmlTest, IncludesRuntimeConfigSummaryAndPruneControls) {
+    const std::string html = evoclaw::server::dashboard::kDashboardHtml;
+    EXPECT_NE(html.find("Runtime Tracked Agents"), std::string::npos);
+    EXPECT_NE(html.find("Runtime History Entries"), std::string::npos);
+    EXPECT_NE(html.find("runtime_version"), std::string::npos);
+    EXPECT_NE(html.find("runtime_history_count"), std::string::npos);
+    EXPECT_NE(html.find("runtime_latest_changed_at"), std::string::npos);
+    EXPECT_NE(html.find("keep_last_per_agent"), std::string::npos);
+    EXPECT_NE(html.find("/api/runtime-config/history/prune"), std::string::npos);
 }
 
 } // namespace
