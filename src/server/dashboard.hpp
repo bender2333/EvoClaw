@@ -1439,8 +1439,11 @@ ${indentLines(formatJsonValue(change), '  ')}`);
           state.runtimeConfigByAgent[item.agent_id] = item;
         }
       }
-      // Render rollback snapshots
-      renderRollbackSnapshots(status.rollback_snapshots || []);
+      // Lazy load rollback snapshots on first render
+      if (!state.rollbackSnapshotsLoaded) {
+        state.rollbackSnapshotsLoaded = true;
+        renderRollbackSnapshots(status.rollback_snapshots || []);
+      }
       if (state.agentsPayload) {
         renderAgents(state.agentsPayload);
       }
@@ -1581,10 +1584,27 @@ ${indentLines(formatJsonValue(change), '  ')}`);
 
     function connectStream() {
       const source = new EventSource('/api/events/stream');
+      const sseStatusEl = document.getElementById('sse-status');
+      
+      // Update SSE status
+      source.onopen = () => {
+        if (sseStatusEl) sseStatusEl.textContent = '🟢';
+      };
+      source.onerror = () => {
+        if (sseStatusEl) sseStatusEl.textContent = '🔴';
+        // Auto-reconnect after 3 seconds
+        setTimeout(() => {
+          if (sseStatusEl) sseStatusEl.textContent = '🟡';
+        }, 3000);
+      };
+
       const eventTypes = [
         'task_submitted', 'task_complete', 'task_failed', 'agent_registered',
         'evolution_started', 'evolution_completed', 'tension_detected',
-        'proposal_applied', 'proposal_rejected', 'server_started'
+        'proposal_applied', 'proposal_rejected', 'server_started',
+        'runtime_config_rollback_success', 'runtime_config_rollback_failed',
+        'runtime_config_history_pruned', 'runtime_governance_updated',
+        'runtime_governance_update_failed'
       ];
 
       const onEvent = (evt) => {
