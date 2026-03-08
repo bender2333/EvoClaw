@@ -1833,7 +1833,7 @@ ${indentLines(formatJsonValue(change), '  ')}`);
 
       connectStream();
       renderRuntimeInspector();
-      setInterval(() => refreshStatus().catch(() => {}), 5000);
+      setInterval(() => refreshStatus().catch(() => {}), 10000);
       setInterval(() => refreshAgents().catch(() => {}), 15000);
     }
 

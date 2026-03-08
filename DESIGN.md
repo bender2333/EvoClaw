@@ -1431,3 +1431,52 @@ Dashboard 增加 runtime governance 的可视化与更新入口。
 - 配置文件不存在时使用默认值 0
 - 配置文件损坏时使用默认值 0
 - 全量测试保持通过
+
+## 9. P14 Dashboard 性能优化
+
+### 9.1 目标
+优化 Dashboard 在长时间运行和大量数据场景下的性能表现，减少不必要的网络请求和 DOM 操作。
+
+### 9.2 优化点
+
+**1. 降低 refreshStatus 频率**
+- 从 5 秒 改为 10 秒
+- 减少服务器压力和网络流量
+
+**2. 懒加载 Rollback Snapshots**
+- 初始不加载，用户滚动到该区域时才加载
+- 减少首屏渲染时间
+
+**3. Event Feed 条目限制**
+- 前端最多保留 200 条（已有）
+- 超出时自动移除最旧的条目
+
+**4. 减少不必要的 DOM 重绘**
+- 数据未变化时跳过 UI 更新
+- 使用 DocumentFragment 批量插入
+
+**5. SSE 连接状态指示**
+- 显示 SSE 连接状态（已连接/断开/重连中）
+- 断开时自动重连
+
+### 9.3 实现要点
+
+**配置常量：**
+- `REFRESH_STATUS_INTERVAL_MS = 10000`（10 秒）
+- `MAX_EVENT_FEED_ENTRIES = 200`
+- `MAX_SNAPSHOTS_DISPLAY = 50`
+
+**懒加载实现：**
+- 使用 IntersectionObserver API
+- 当 rollback 卡片进入视口时加载
+
+**状态缓存：**
+- 缓存上次 status 数据
+- 仅当数据变化时更新 UI
+
+### 9.4 测试要求
+- Dashboard 功能正常
+- refreshStatus 间隔为 10 秒
+- Event feed 最多保留 200 条
+- SSE 断开后能自动重连
+- 全量测试保持通过
