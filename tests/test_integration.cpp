@@ -917,6 +917,48 @@ TEST_F(IntegrationTest, RuntimeConfigAutoPruneEmitsAuditablePruneEvent) {
     EXPECT_EQ(prune_event["removed_by_agent"][0]["removed_entries"].get<std::size_t>(), 2U);
 }
 
+TEST_F(IntegrationTest, GovernanceConfigPersistsAcrossRestart) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+    config.runtime_history_keep_last_per_agent = 0U;
+
+    {
+        evoclaw::facade::EvoClawFacade facade(config);
+        facade.initialize();
+        facade.register_agent(std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config("executor-gov-persist", "executor", {"execute"})));
+
+        EXPECT_EQ(facade.get_runtime_governance_status()["keep_last_per_agent"].get<std::size_t>(), 0U);
+
+        facade.set_runtime_history_keep_last_per_agent(3U);
+
+        EXPECT_EQ(facade.get_runtime_governance_status()["keep_last_per_agent"].get<std::size_t>(), 3U);
+    }
+
+    EXPECT_TRUE(std::filesystem::exists(test_dir_ / "governance_config.json"));
+
+    {
+        evoclaw::facade::EvoClawFacade facade2(config);
+        facade2.initialize();
+        facade2.register_agent(std::make_shared<evoclaw::agent::Executor>(
+            make_agent_config("executor-gov-persist", "executor", {"execute"})));
+
+        EXPECT_EQ(facade2.get_runtime_governance_status()["keep_last_per_agent"].get<std::size_t>(), 3U);
+    }
+}
+
+TEST_F(IntegrationTest, GovernanceConfigUsesDefaultWhenFileMissing) {
+    evoclaw::facade::EvoClawFacade::Config config;
+    config.log_dir = test_dir_;
+
+    evoclaw::facade::EvoClawFacade facade(config);
+    facade.initialize();
+    facade.register_agent(std::make_shared<evoclaw::agent::Executor>(
+        make_agent_config("executor-gov-default", "executor", {"execute"})));
+
+    EXPECT_EQ(facade.get_runtime_governance_status()["keep_last_per_agent"].get<std::size_t>(), 0U);
+}
+
 TEST_F(IntegrationTest, ValidatePatchSchemaRejectsUnknownFields) {
     std::string reason;
     EXPECT_TRUE(evoclaw::facade::EvoClawFacade::validate_patch_schema(

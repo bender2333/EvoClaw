@@ -1391,3 +1391,43 @@ Dashboard 增加 runtime governance 的可视化与更新入口。
 - event feed 显示 rollback 事件
 - 失败时显示错误信息
 - 全量测试保持通过
+
+## 8. P11 slice 5：Governance 配置持久化
+
+### 8.1 目标
+让 runtime governance 配置（`runtime_history_keep_last_per_agent`）在 server 重启后保持，而不是每次重置为默认值 0。
+
+### 8.2 设计
+
+**配置存储：**
+- 新增配置文件：`log_dir/governance_config.json`
+- 内容格式：
+```json
+{
+  "runtime_history_keep_last_per_agent": 2
+}
+```
+
+**生命周期：**
+- `initialize()` 时自动加载（如果文件存在）
+- `set_runtime_history_keep_last_per_agent()` 时自动保存
+- 文件不存在时使用默认值 0（不自动裁剪）
+
+**向后兼容：**
+- 旧配置无此字段时，使用默认值 0
+- 配置文件损坏时，使用默认值 0，不报错
+
+### 8.3 实现要点
+
+**新增私有方法：**
+- `load_governance_config()` — 在 `initialize()` 中调用
+- `save_governance_config()` — 在 `set_runtime_history_keep_last_per_agent()` 中调用
+
+**配置路径：**
+- `config_.log_dir / "governance_config.json"`
+
+### 8.4 测试要求
+- 设置 governance 配置后重启，配置保持
+- 配置文件不存在时使用默认值 0
+- 配置文件损坏时使用默认值 0
+- 全量测试保持通过

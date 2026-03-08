@@ -159,6 +159,7 @@ void EvoClawFacade::initialize() {
     load_evolution_history();
     load_runtime_config_versions();
     load_runtime_config_history();
+    load_governance_config();
     initialized_ = true;
 }
 
@@ -1360,6 +1361,7 @@ nlohmann::json EvoClawFacade::get_runtime_governance_status() const {
 
 void EvoClawFacade::set_runtime_history_keep_last_per_agent(const std::size_t keep_last_per_agent) {
     config_.runtime_history_keep_last_per_agent = keep_last_per_agent;
+    save_governance_config();
     maybe_auto_prune_runtime_config_history();
 }
 
@@ -1702,6 +1704,38 @@ void EvoClawFacade::clear_old_runtime_config_history(std::size_t keep_last_per_a
 
     std::reverse(retained_reversed.begin(), retained_reversed.end());
     runtime_config_history_ = std::move(retained_reversed);
+}
+
+void EvoClawFacade::load_governance_config() {
+    const auto config_path = config_.log_dir / "governance_config.json";
+    if (!std::filesystem::exists(config_path)) {
+        return;
+    }
+    std::ifstream ifs(config_path);
+    if (!ifs) {
+        return;
+    }
+    try {
+        const auto parsed = nlohmann::json::parse(ifs);
+        if (!parsed.is_object()) {
+            return;
+        }
+        if (parsed.contains("runtime_history_keep_last_per_agent") && parsed["runtime_history_keep_last_per_agent"].is_number_unsigned()) {
+            config_.runtime_history_keep_last_per_agent = parsed["runtime_history_keep_last_per_agent"].get<std::size_t>();
+        }
+    } catch (const std::exception&) {
+        // ignore parse errors, use default value 0
+    }
+}
+
+void EvoClawFacade::save_governance_config() {
+    const auto config_path = config_.log_dir / "governance_config.json";
+    nlohmann::json data = nlohmann::json::object();
+    data["runtime_history_keep_last_per_agent"] = config_.runtime_history_keep_last_per_agent;
+    std::ofstream ofs(config_path);
+    if (ofs) {
+        ofs << data.dump(2);
+    }
 }
 
 void EvoClawFacade::clear_expired_snapshots(std::chrono::seconds max_age) {
