@@ -125,6 +125,7 @@ inline constexpr const char* kDashboardHtml = R"html(
     .agents { grid-area: agents; }
     .actions { grid-area: actions; }
     .runtime { grid-area: runtime; }
+    .rollback { grid-area: evolution; }
     .evolution { grid-area: evolution; }
 
     .stats {
@@ -274,6 +275,60 @@ inline constexpr const char* kDashboardHtml = R"html(
     button:hover {
       transform: translateY(-1px);
       background: #165086;
+    }
+
+    .rollback-snapshot-item {
+      background: rgba(15, 52, 96, 0.35);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.7rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .rollback-snapshot-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.4rem;
+    }
+
+    .rollback-snapshot-agent {
+      font-weight: 600;
+      color: #f5f7ff;
+      font-size: 0.85rem;
+    }
+
+    .rollback-snapshot-time {
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    .rollback-snapshot-details {
+      color: var(--muted);
+      font-size: 0.75rem;
+      margin-bottom: 0.5rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .rollback-btn {
+      background: var(--accent);
+      border-color: #ff758b;
+      color: #fff;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.78rem;
+    }
+
+    .rollback-btn:hover {
+      background: #ff5f79;
+    }
+
+    .rollback-empty {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 1.5rem;
     }
 
     button.accent {
@@ -600,6 +655,13 @@ inline constexpr const char* kDashboardHtml = R"html(
           <pre class="runtime-diff-text">Diff will appear here after compare.</pre>
         </div>
       </section>
+
+      <section class="card rollback">
+        <h2>Rollback Snapshots</h2>
+        <div id="rollback-snapshots-list">
+          <p class="rollback-empty">Loading snapshots...</p>
+        </div>
+      </section>
     </main>
 
     <footer class="footer">
@@ -649,7 +711,13 @@ inline constexpr const char* kDashboardHtml = R"html(
         'diff.unavailable': 'Runtime diff unavailable: selected versions are missing or pruned from retained history.',
         'footer.integrity': 'Event Log Integrity: ',
         'event.loading_history': 'Loading History...',
-        'event.inspecting': 'Inspecting Runtime'
+        'event.inspecting': 'Inspecting Runtime',
+        'card.rollback': 'Rollback Snapshots',
+        'btn.rollback': 'Rollback',
+        'rollback.empty': 'No rollback snapshots available.',
+        'rollback.rolling_back': 'Rolling back...',
+        'rollback.success': 'Rollback succeeded',
+        'rollback.failed': 'Rollback failed'
       },
       zh: {
         'page.title': 'EvoClaw 仪表盘',
@@ -690,7 +758,13 @@ inline constexpr const char* kDashboardHtml = R"html(
         'diff.unavailable': 'Runtime diff 不可用：所选版本已被裁剪或不存在。',
         'footer.integrity': '事件日志完整性：',
         'event.loading_history': '加载历史中...',
-        'event.inspecting': '检查 Runtime 中'
+        'event.inspecting': '检查 Runtime 中',
+        'card.rollback': '回滚快照',
+        'btn.rollback': '回滚',
+        'rollback.empty': '暂无回滚快照。',
+        'rollback.rolling_back': '回滚中...',
+        'rollback.success': '回滚成功',
+        'rollback.failed': '回滚失败'
       }
     };
 
@@ -718,6 +792,8 @@ inline constexpr const char* kDashboardHtml = R"html(
       document.querySelector('.card.actions h2').textContent = t('card.operations');
       document.querySelector('.card.evolution h2').textContent = t('card.evolution');
       document.querySelector('.card.runtime h2').textContent = t('card.runtime');
+      const rollbackTitle = document.querySelector('.card.rollback h2');
+      if (rollbackTitle) rollbackTitle.textContent = t('card.rollback');
 
       // Stats
       document.querySelector('#stat-agents').previousElementSibling.textContent = t('stat.agents');
@@ -1363,6 +1439,8 @@ ${indentLines(formatJsonValue(change), '  ')}`);
           state.runtimeConfigByAgent[item.agent_id] = item;
         }
       }
+      // Render rollback snapshots
+      renderRollbackSnapshots(status.rollback_snapshots || []);
       if (state.agentsPayload) {
         renderAgents(state.agentsPayload);
       }
@@ -1399,6 +1477,98 @@ ${indentLines(formatJsonValue(change), '  ')}`);
       }
       renderRuntimeInspector();
     }
+
+    function renderRollbackSnapshots(snapshots) {
+      const container = document.getElementById('rollback-snapshots-list');
+      if (!container) return;
+
+      if (!snapshots || snapshots.length === 0) {
+        container.innerHTML = '<p class="rollback-empty">No rollback snapshots available.</p>';
+        return;
+      }
+
+      container.innerHTML = '';
+      for (const snapshot of snapshots) {
+        if (!snapshot || !snapshot.proposal_id) continue;
+
+        const item = document.createElement('div');
+        item.className = 'rollback-snapshot-item';
+
+        const header = document.createElement('div');
+        header.className = 'rollback-snapshot-header';
+
+        const agentSpan = document.createElement('span');
+        agentSpan.className = 'rollback-snapshot-agent';
+        agentSpan.textContent = snapshot.agent_id || 'unknown';
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'rollback-snapshot-time';
+        timeSpan.textContent = fmtDateTime(snapshot.applied_at);
+
+        header.appendChild(agentSpan);
+        header.appendChild(timeSpan);
+
+        const details = document.createElement('div');
+        details.className = 'rollback-snapshot-details';
+        const beforeSummary = snapshot.config_before && snapshot.config_before.system_prompt
+          ? snapshot.config_before.system_prompt.substring(0, 50)
+          : '-';
+        details.textContent = `proposal: ${snapshot.proposal_id.substring(0, 8)}... | before: ${beforeSummary}...`;
+
+        const rollbackBtn = document.createElement('button');
+        rollbackBtn.type = 'button';
+        rollbackBtn.className = 'rollback-btn';
+        rollbackBtn.textContent = 'Rollback';
+        rollbackBtn.dataset.proposalId = snapshot.proposal_id;
+
+        item.appendChild(header);
+        item.appendChild(details);
+        item.appendChild(rollbackBtn);
+
+        container.appendChild(item);
+      }
+    }
+
+    document.getElementById('rollback-snapshots-list').addEventListener('click', async (event) => {
+      if (!event.target.classList.contains('rollback-btn')) return;
+
+      const btn = event.target;
+      const proposalId = btn.dataset.proposalId;
+      if (!proposalId) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Rolling back...';
+
+      try {
+        const payload = await getJson('/api/runtime-config/rollback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ proposal_id: proposalId })
+        });
+
+        await Promise.all([refreshStatus(), refreshAgents()]);
+        if (state.runtimeInspector.selectedAgentId) {
+          await ensureRuntimeHistory(state.runtimeInspector.selectedAgentId, {
+            forceReload: true,
+            alignCompareToLatest: true
+          });
+        }
+
+        appendEvent({
+          event: 'runtime_config_rollback_success',
+          message: `Rollback succeeded: ${proposalId.substring(0, 8)}...`,
+          timestamp: new Date().toISOString()
+        });
+      } catch (err) {
+        appendEvent({
+          event: 'runtime_config_rollback_failed',
+          message: `Rollback failed: ${err.message}`,
+          timestamp: new Date().toISOString()
+        });
+        btn.disabled = false;
+        btn.textContent = 'Rollback';
+      }
+    });
 
     async function loadEventHistory() {
       const payload = await getJson('/api/events');

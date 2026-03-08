@@ -1338,3 +1338,56 @@ Dashboard 增加 runtime governance 的可视化与更新入口。
 - 切换语言后所有 UI 文本立即更新
 - 刷新页面后语言偏好保持
 - 默认语言为英文
+
+## 7. P12 Rollback UI 闭环
+
+### 7.1 目标
+让用户能从 Dashboard 直接查看 rollback snapshots 并执行 rollback 操作，形成完整的 runtime governance 操作闭环。
+
+### 7.2 功能设计
+
+**1. Snapshots 列表展示**
+- 在 Runtime Config Inspector 面板内增加 "Rollback Snapshots" 区域
+- 显示每个 snapshot 的关键信息：
+  - proposal_id
+  - agent_id
+  - applied_at（格式化时间）
+  - config_before 摘要（如 system_prompt 前 50 字符）
+- 按 applied_at 倒序排列（最新的在前）
+- 空状态提示："No rollback snapshots available"
+
+**2. Rollback 操作**
+- 每个 snapshot 条目有一个 "Rollback" 按钮
+- 点击后：
+  - 调用 `POST /api/runtime-config/rollback`
+  - body: `{ "proposal_id": "..." }`
+  - 成功后刷新 runtime inspector 状态
+  - 写入 event feed（`runtime_config_rollback_success` / `runtime_config_rollback_failed`）
+
+**3. 结果可视化**
+- 成功：绿色提示 + event feed 成功事件
+- 失败：红色提示 + event feed 失败事件 + 错误信息
+
+### 7.3 API 设计
+
+**新增 endpoint:**
+- `POST /api/runtime-config/rollback`
+  - body: `{ "proposal_id": string }`
+  - success response: `{ "ok": true, "proposal_id": "...", "runtime_config": {...} }`
+  - error response: `{ "ok": false, "error": "..." }`
+
+**复用现有 endpoint:**
+- `GET /api/status` — 已包含 `rollback_snapshots` 数组
+
+### 7.4 约束
+- 不修改 backend rollback 逻辑（`facade.rollback_proposal()` 已存在）
+- 只增加 server 路由和 dashboard UI
+- 保持与现有 i18n 的兼容性（rollback 相关文本需翻译）
+
+### 7.5 测试要求
+- Dashboard HTML 包含 snapshots 列表区域和 rollback 按钮
+- 点击 rollback 按钮能正确调用 API
+- 成功后 runtime inspector 状态更新
+- event feed 显示 rollback 事件
+- 失败时显示错误信息
+- 全量测试保持通过

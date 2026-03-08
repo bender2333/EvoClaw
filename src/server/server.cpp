@@ -535,6 +535,10 @@ void EvoClawServer::setup_routes() {
         handle_runtime_config_governance_post(req, res);
     });
 
+    server_.Post("/api/runtime-config/rollback", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_runtime_config_rollback(req, res);
+    });
+
     server_.Get("/api/events", [this](const httplib::Request&, httplib::Response& res) {
         json payload;
         payload["events"] = json::array();
@@ -757,6 +761,51 @@ void EvoClawServer::handle_runtime_config_governance_post(const httplib::Request
         set_json_response(res, {
             {"ok", true},
             {"governance", facade_.get_runtime_governance_status()},
+            {"runtime_config", status.value("runtime_config", json::object())}
+        });
+    } catch (const std::exception& ex) {
+        set_json_response(res, build_error(ex.what()), 500);
+    }
+}
+
+void EvoClawServer::handle_runtime_config_rollback(const httplib::Request& req, httplib::Response& res) {
+    json body;
+    try {
+        body = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+        set_json_response(res, build_error("Invalid JSON body"), 400);
+        return;
+    }
+
+    if (!body.contains("proposal_id") || !body["proposal_id"].is_string()) {
+        set_json_response(res, build_error("Field 'proposal_id' is required and must be a string"), 400);
+        return;
+    }
+
+    const std::string proposal_id = body["proposal_id"].get<std::string>();
+    if (proposal_id.empty()) {
+        set_json_response(res, build_error("Field 'proposal_id' cannot be empty"), 400);
+        return;
+    }
+
+    std::string reason;
+    try {
+        const bool success = facade_.rollback_proposal(proposal_id, &reason);
+        if (!success) {
+            set_json_response(res, {
+                {"ok", false},
+                {"error", reason.empty() ? "Rollback failed" : reason},
+                {"proposal_id", proposal_id}
+            }, 400);
+            return;
+        }
+
+        facade_.save_state();
+
+        const auto status = facade_.get_status();
+        set_json_response(res, {
+            {"ok", true},
+            {"proposal_id", proposal_id},
             {"runtime_config", status.value("runtime_config", json::object())}
         });
     } catch (const std::exception& ex) {
