@@ -1309,3 +1309,32 @@ Dashboard 增加 runtime governance 的可视化与更新入口。
 - 事件字段包含裁剪前后条数、阈值、按 agent 的裁剪统计
 - 裁剪后版本号保持不回退
 - 全量测试保持通过
+
+## 6. P13 Dashboard 国际化（i18n）
+
+### 6.1 目标
+为 Dashboard 增加中英文切换能力，让用户可以选择界面语言。
+
+### 6.2 设计要点
+- 在 header 增加语言切换按钮（EN / 中文）
+- 使用简单字典映射，不引入外部 i18n 库
+- 支持的语言：
+  - `en` — English（默认）
+  - `zh` — 简体中文
+- 用户选择后保存到 `localStorage`，下次打开自动恢复
+- 所有 UI 文本通过 `t(key)` 函数获取，支持动态插值
+
+### 6.3 翻译范围（第一版）
+- 页面标题
+- 卡片标题（System Status / Real-time Event Feed / Agents / Operations / Runtime Config Inspector / Evolution History）
+- 统计标签（Agents / Tasks / Events / Integrity / Runtime Tracked Agents / Runtime History Entries / Runtime Auto Prune / Runtime Keep Last）
+- 按钮文本（Submit Task / Trigger Evolution / Prune Runtime History / Update Runtime Governance / Compare Versions / Inspect Runtime）
+- 表单标签
+- 状态文本（Status: Running / Starting / SSE reconnecting）
+- Event feed 事件类型
+
+### 6.4 测试要求
+- Dashboard HTML 包含语言切换按钮
+- 切换语言后所有 UI 文本立即更新
+- 刷新页面后语言偏好保持
+- 默认语言为英文

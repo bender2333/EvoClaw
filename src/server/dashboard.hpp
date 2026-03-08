@@ -69,6 +69,33 @@ inline constexpr const char* kDashboardHtml = R"html(
       white-space: nowrap;
     }
 
+    .lang-switch {
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+    }
+
+    .lang-btn {
+      background: var(--highlight);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.25rem 0.6rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+
+    .lang-btn:hover {
+      background: #165086;
+      border-color: #3a5a8a;
+    }
+
+    .lang-btn.active {
+      background: var(--accent);
+      border-color: #ff758b;
+    }
+
     .grid {
       display: grid;
       gap: 1rem;
@@ -456,7 +483,13 @@ inline constexpr const char* kDashboardHtml = R"html(
   <div class="container">
     <header class="header">
       <h1>EvoClaw Dashboard</h1>
-      <div class="status-pill" id="runtime-status">Status: Booting</div>
+      <div style="display:flex;gap:0.8rem;align-items:center;">
+        <div class="lang-switch">
+          <button type="button" class="lang-btn active" data-lang="en">EN</button>
+          <button type="button" class="lang-btn" data-lang="zh">中文</button>
+        </div>
+        <div class="status-pill" id="runtime-status">Status: Booting</div>
+      </div>
     </header>
 
     <main class="grid">
@@ -575,6 +608,194 @@ inline constexpr const char* kDashboardHtml = R"html(
   </div>
 
   <script>
+    // i18n: translation dictionary
+    const translations = {
+      en: {
+        'page.title': 'EvoClaw Dashboard',
+        'card.system_status': 'System Status',
+        'card.events': 'Real-time Event Feed',
+        'card.agents': 'Agents',
+        'card.operations': 'Operations',
+        'card.evolution': 'Evolution History',
+        'card.runtime': 'Runtime Config Inspector',
+        'stat.agents': 'Agents',
+        'stat.tasks': 'Tasks',
+        'stat.events': 'Events',
+        'stat.integrity': 'Integrity',
+        'stat.runtime_tracked': 'Runtime Tracked Agents',
+        'stat.runtime_history': 'Runtime History Entries',
+        'stat.runtime_auto_prune': 'Runtime Auto Prune',
+        'stat.runtime_keep_last': 'Runtime Keep Last',
+        'btn.submit_task': 'Submit Task',
+        'btn.trigger_evolution': 'Trigger Evolution',
+        'btn.prune_history': 'Prune Runtime History',
+        'btn.update_governance': 'Update Runtime Governance',
+        'btn.compare': 'Compare Versions',
+        'btn.inspect': 'Inspect Runtime',
+        'label.task_description': 'Describe a task...',
+        'label.keep_last_per_agent': 'Runtime history keep_last_per_agent',
+        'label.governance_keep_last': 'Runtime governance keep_last_per_agent',
+        'label.from_version': 'from_version',
+        'label.to_version': 'to_version',
+        'status.running': 'Status: Running',
+        'status.starting': 'Status: Starting',
+        'status.reconnecting': 'Status: SSE reconnecting',
+        'status.integrity_unknown': 'Unknown',
+        'hint.runtime_history': 'Click a runtime history entry to stage compare versions.',
+        'hint.select_agent': 'Select an agent and click Inspect Runtime.',
+        'hint.load_history': 'Select an agent to load runtime history.',
+        'diff.idle': 'Diff will appear here after compare.',
+        'diff.no_changes': 'No runtime config differences between selected versions.',
+        'diff.unavailable': 'Runtime diff unavailable: selected versions are missing or pruned from retained history.',
+        'footer.integrity': 'Event Log Integrity: ',
+        'event.loading_history': 'Loading History...',
+        'event.inspecting': 'Inspecting Runtime'
+      },
+      zh: {
+        'page.title': 'EvoClaw 仪表盘',
+        'card.system_status': '系统状态',
+        'card.events': '实时事件流',
+        'card.agents': 'Agent',
+        'card.operations': '操作',
+        'card.evolution': '进化历史',
+        'card.runtime': 'Runtime 配置检查器',
+        'stat.agents': 'Agent 数量',
+        'stat.tasks': '任务数',
+        'stat.events': '事件数',
+        'stat.integrity': '完整性',
+        'stat.runtime_tracked': 'Runtime 跟踪 Agent',
+        'stat.runtime_history': 'Runtime 历史条目',
+        'stat.runtime_auto_prune': '自动裁剪',
+        'stat.runtime_keep_last': '保留条数',
+        'btn.submit_task': '提交任务',
+        'btn.trigger_evolution': '触发进化',
+        'btn.prune_history': '裁剪 Runtime 历史',
+        'btn.update_governance': '更新 Governance',
+        'btn.compare': '比较版本',
+        'btn.inspect': '检查 Runtime',
+        'label.task_description': '描述任务...',
+        'label.keep_last_per_agent': 'Runtime history keep_last_per_agent',
+        'label.governance_keep_last': 'Runtime governance keep_last_per_agent',
+        'label.from_version': '起始版本',
+        'label.to_version': '目标版本',
+        'status.running': '状态：运行中',
+        'status.starting': '状态：启动中',
+        'status.reconnecting': '状态：SSE 重连中',
+        'status.integrity_unknown': '未知',
+        'hint.runtime_history': '点击历史条目以 staging 比较版本。',
+        'hint.select_agent': '选择一个 Agent 并点击检查 Runtime。',
+        'hint.load_history': '选择一个 Agent 以加载 runtime 历史。',
+        'diff.idle': '比较后此处将显示 diff。',
+        'diff.no_changes': '所选版本间无 runtime 配置差异。',
+        'diff.unavailable': 'Runtime diff 不可用：所选版本已被裁剪或不存在。',
+        'footer.integrity': '事件日志完整性：',
+        'event.loading_history': '加载历史中...',
+        'event.inspecting': '检查 Runtime 中'
+      }
+    };
+
+    // Current language (default: en, restore from localStorage)
+    let currentLang = localStorage.getItem('evoclaw_dashboard_lang') || 'en';
+    if (!translations[currentLang]) {
+      currentLang = 'en';
+    }
+
+    // Translation function
+    function t(key) {
+      const dict = translations[currentLang];
+      return dict[key] || translations.en[key] || key;
+    }
+
+    // Apply language to UI
+    function applyLanguage() {
+      document.documentElement.lang = currentLang;
+      document.title = t('page.title');
+
+      // Card titles
+      document.querySelector('.card.overview h2').textContent = t('card.system_status');
+      document.querySelector('.card.events h2').textContent = t('card.events');
+      document.querySelector('.card.agents h2').textContent = t('card.agents');
+      document.querySelector('.card.actions h2').textContent = t('card.operations');
+      document.querySelector('.card.evolution h2').textContent = t('card.evolution');
+      document.querySelector('.card.runtime h2').textContent = t('card.runtime');
+
+      // Stats
+      document.querySelector('#stat-agents').previousElementSibling.textContent = t('stat.agents');
+      document.querySelector('#stat-tasks').previousElementSibling.textContent = t('stat.tasks');
+      document.querySelector('#stat-events').previousElementSibling.textContent = t('stat.events');
+      document.querySelector('#stat-integrity').previousElementSibling.textContent = t('stat.integrity');
+      document.querySelector('#stat-runtime-tracked-agents').previousElementSibling.textContent = t('stat.runtime_tracked');
+      document.querySelector('#stat-runtime-history-entries').previousElementSibling.textContent = t('stat.runtime_history');
+      document.querySelector('#stat-runtime-auto-prune').previousElementSibling.textContent = t('stat.runtime_auto_prune');
+      document.querySelector('#stat-runtime-keep-last').previousElementSibling.textContent = t('stat.runtime_keep_last');
+
+      // Buttons
+      const taskFormBtn = document.querySelector('#task-form button[type="submit"]');
+      if (taskFormBtn) taskFormBtn.textContent = t('btn.submit_task');
+      document.querySelector('#evolve-btn').textContent = t('btn.trigger_evolution');
+      const pruneBtn = document.querySelector('#runtime-prune-form button[type="submit"]');
+      if (pruneBtn) pruneBtn.textContent = t('btn.prune_history');
+      const govBtn = document.querySelector('#runtime-governance-form button[type="submit"]');
+      if (govBtn) govBtn.textContent = t('btn.update_governance');
+      document.querySelector('#runtime-compare-btn').textContent = t('btn.compare');
+
+      // Labels
+      const taskDesc = document.querySelector('#task-description');
+      if (taskDesc) taskDesc.placeholder = t('label.task_description');
+      const pruneLabel = document.querySelector('label[for="keep-last-per-agent"]');
+      if (pruneLabel) pruneLabel.textContent = t('label.keep_last_per_agent');
+      const govLabel = document.querySelector('label[for="runtime-governance-keep-last"]');
+      if (govLabel) govLabel.textContent = t('label.governance_keep_last');
+      document.querySelector('label[for="runtime-from-version"]').textContent = t('label.from_version');
+      document.querySelector('label[for="runtime-to-version"]').textContent = t('label.to_version');
+
+      // Hints
+      document.querySelector('#runtime-history-hint').textContent = t('hint.runtime_history');
+      document.querySelector('#runtime-inspector-selected').textContent = t('hint.select_agent');
+      document.querySelector('#runtime-history-empty').textContent = t('hint.load_history');
+
+      // Diff
+      const diffPre = document.querySelector('#runtime-diff-output .runtime-diff-text');
+      if (diffPre) diffPre.textContent = t('diff.idle');
+
+      // Footer
+      const footerPrefix = document.querySelector('#integrity-footer').previousSibling;
+      if (footerPrefix && footerPrefix.nodeType === Node.TEXT_NODE) {
+        footerPrefix.textContent = t('footer.integrity');
+      }
+
+      // Update lang buttons
+      document.querySelectorAll('.lang-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.lang === currentLang);
+      });
+
+      // Refresh status pill if needed
+      const statusPill = document.getElementById('runtime-status');
+      if (statusPill) {
+        if (statusPill.textContent.includes('Running') || statusPill.textContent.includes('运行')) {
+          statusPill.textContent = t('status.running');
+          statusPill.style.color = 'var(--ok)';
+        } else if (statusPill.textContent.includes('Starting') || statusPill.textContent.includes('启动') || statusPill.textContent.includes('Booting')) {
+          statusPill.textContent = t('status.starting');
+          statusPill.style.color = 'var(--warn)';
+        }
+      }
+    }
+
+    // Language switch handler
+    function setupLanguageSwitch() {
+      document.querySelectorAll('.lang-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const newLang = btn.dataset.lang;
+          if (newLang !== currentLang) {
+            currentLang = newLang;
+            localStorage.setItem('evoclaw_dashboard_lang', currentLang);
+            applyLanguage();
+          }
+        });
+      });
+    }
+
     const state = {
       events: [],
       evolution: [],
@@ -1426,6 +1647,10 @@ ${indentLines(formatJsonValue(change), '  ')}`);
     });
 
     async function bootstrap() {
+      // Initialize i18n
+      setupLanguageSwitch();
+      applyLanguage();
+
       try {
         await Promise.all([refreshStatus(), refreshAgents(), loadEventHistory()]);
       } catch (err) {
