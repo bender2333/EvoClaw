@@ -13,7 +13,10 @@
       "Bash(source /tmp/composio-env/bin/activate && python3 -c \"\nfrom composio import Composio\ncomposio = Composio\\(api_key='ak_muXCXC8dmDmI-XqnMcv8'\\)\nsession = composio.create\\(user_id='claude_user'\\)\nprint\\(session.mcp.url\\)\n\" 2>&1)",
       "Bash(git ls-tree -r --name-only 8b09b98 | grep -E '\\\\.\\(hpp|cpp|txt\\)$' | sort)",
       "Bash(git add CLAUDE.md .claude/ && git commit -m \"chore: add Claude Code project config and commands\")",
-      "Bash(git config user.name \"bender\" && git config user.email \"bender@localhost\")"
+      "Bash(git config user.name \"bender\" && git config user.email \"bender@localhost\")",
+      "Bash(git add _bmad/ && git commit -m \"feat: add BMAD framework \\(bmm module + core workflows\\)\")",
+      "Bash(git add _bmad-output/ && git commit -m \"docs: add PRD and architecture design \\(BMAD workflow output\\)\")",
+      "Bash(git add doc_design/ && git commit -m \"docs: add A2A protocol research and QA design documents\")"
     ]
   }
 }
